@@ -4,12 +4,13 @@ import { Stage, CubeObject } from './render/stage.js';
 import { launchConfetti } from './render/confetti.js';
 import { Scanner } from './scan/scanner.js';
 import { ScanSession, STEPS, COLOR_INFO, slotColors } from './scan/session.js';
-import { scanToCanonical, FACES, SOLVED, validateFacelets, parseMoves, applyMoves } from './cube/cube.js';
+import { scanToCanonical, rotateGrid, FACES, SOLVED, validateFacelets, parseMoves, applyMoves } from './cube/cube.js';
 import { labDist, labToRgb, chroma, hueDeg } from './vision/color.js';
 import { detectMultiScale } from './vision/multiscale.js';
 import { solve, warmUp } from './solver/solver.js';
 import { adjacentFaces, topFromNeighbor } from './scan/orientation.js';
-import { CubeModel, transposeRot } from './scan/model.js';
+import { CubeModel } from './scan/model.js';
+import { resolveHybrid, fixedFromModel } from './scan/hybrid.js';
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -90,6 +91,12 @@ async function startScan(mode = scan.mode || 'free') {
   scan.session = new ScanSession();
   scan.track = null;
   scan.model = new CubeModel();
+  scan.free = new ScanSession({ anyOrder: true });
+  scan.relVotes = {};
+  scan.relChanged = false;
+  scan.resolving = false;
+  scan.waitSince = 0;
+  scan.lastPick = null;
   scan.finishing = false;
   scan.retries = 0;
   scan.hint = { text: '', t: 0 };
@@ -101,9 +108,9 @@ async function startScan(mode = scan.mode || 'free') {
   if (mode === 'free') {
     stage.anchor($('mini-cube'), { fit: 'cube', duration: 900 });
     cube.setDefaultView(700).then(() => { cube.spinning = true; });
-    $('mini-count').textContent = '0 / 54';
-    $('mini-bar').style.width = '0%';
-    setHint('Montre-moi ton cube en biais, pour que je voie 2 ou 3 faces');
+    renderChips(scan.free);
+    refreshMini();
+    setHint('Montre-moi une face du cube, bien de face');
   } else {
     cube.spinning = false;
     stage.anchor($('guide'), { fit: 'cube', duration: 900 });
@@ -143,18 +150,21 @@ function stepCells(color) {
   return sc.rgbs.map((rgb) => `rgb(${rgb.join(',')})`);
 }
 
+// Pastilles des 6 faces (remplies quand la face est capturée).
+function renderChips(session, current = null) {
+  $('steps').innerHTML = STEPS.map((st) => {
+    const sc = session.scans[st.color];
+    const inner = sc
+      ? sc.rgbs.map((c) => `<span style="background:rgb(${c.join(',')})"></span>`).join('')
+      : Array.from({ length: 9 }, (_, i) => `<span style="background:${i === 4 ? COLOR_INFO[st.color].css : 'transparent'}"></span>`).join('');
+    return `<div class="step${current === st.color ? ' current' : ''}${sc ? ' done' : ''}" title="Face ${COLOR_INFO[st.color].name}">${inner}</div>`;
+  }).join('');
+}
+
 function updateScanUI() {
   const s = scan.session;
   const step = s.nextStep();
-  // Pastilles de progression.
-  $('steps').innerHTML = STEPS.map((st) => {
-    const cells = stepCells(st.color);
-    const cur = step && st.color === step.color;
-    const inner = cells
-      ? cells.map((c) => `<span style="background:${c}"></span>`).join('')
-      : Array.from({ length: 9 }, (_, i) => `<span style="background:${i === 4 ? COLOR_INFO[st.color].css : 'transparent'}"></span>`).join('');
-    return `<div class="step${cur ? ' current' : ''}" title="Face ${COLOR_INFO[st.color].name}">${inner}</div>`;
-  }).join('');
+  renderChips(s, step && step.color);
   $('scan-undo').disabled = s.history.length === 0;
   if (!step) return;
   const first = s.history.length === 0;
@@ -269,11 +279,11 @@ function onDetection(res) {
   $('stability-bar').style.width = `${Math.round(progress * 100)}%`;
 }
 
-function looksLikeSkin(lab) {
+function looksLikeSkin(lab, session = scan.session) {
   const c = chroma(lab), h = hueDeg(lab);
   if (!(c > 12 && c < 32 && h > 25 && h < 70 && lab[0] > 40 && lab[0] < 88)) return false;
   // Une vraie couleur du cube déjà mesurée (orange pâle, blanc chaud…) ?
-  return !Object.values(scan.session.scans).some((sc) => labDist(lab, sc.labs[4]) < 18);
+  return !Object.values(session.scans).some((sc) => labDist(lab, sc.labs[4]) < 18);
 }
 
 function medianLab(list) {
@@ -410,68 +420,164 @@ function drawOverlay(res, pick, classify = null) {
 
 
 // ---------------------------------------------------------------- Scan libre
-// On tourne le cube comme on veut ; le modèle 3D se remplit tout seul.
+// Mode libre : on montre les faces dans n'importe quel ordre et n'importe quel
+// sens ; chacune est capturée dès qu'elle est stable (comme en pas à pas).
+// En bonus, quand deux faces sont visibles ensemble, on note laquelle touche
+// laquelle (cela fixe leur orientation) et le modèle 3D se remplit.
 
-const DIRECTION_HINTS = [
-  { v: [0, 1, 0], text: 'Montre-moi le dessus', icon: '⤴' },
-  { v: [0, -1, 0], text: 'Montre-moi le dessous', icon: '⤵' },
-  { v: [1, 0, 0], text: 'Tourne le cube vers la gauche pour me montrer le côté droit', icon: '↺' },
-  { v: [-1, 0, 0], text: 'Tourne le cube vers la droite pour me montrer le côté gauche', icon: '↻' },
-  { v: [0, 0, -1], text: 'Retourne le cube : montre-moi l’arrière', icon: '⟲' },
-  { v: [0, 0, 1], text: 'Tiens la face de devant bien en face', icon: '◎' },
-];
-
-// Évite que la consigne clignote : on la garde au moins un moment.
 function freeHint(text, priority = false) {
   const now = performance.now();
   if (text === scan.hint.text) return;
-  if (!priority && now - scan.hint.t < 1300) return;
+  if (!priority && now - scan.hint.t < 900) return;
   scan.hint = { text, t: now };
   setHint(text);
 }
 
-let lastMini = 0;
-function onFreeDetection(res) {
-  if (scan.finishing || !$('scan').classList.contains('active')) return;
-  const model = scan.model;
-  const r = model.update(res.faces);
-  drawFreeOverlay(res, r);
-  const now = performance.now();
-  if (now - lastMini > 120) {
-    lastMini = now;
-    cube.setOverride(model.displayColors());
-    const p = model.progress();
-    $('mini-count').textContent = `${p.known} / 54`;
-    $('mini-bar').style.width = `${Math.round((100 * p.known) / 54)}%`;
+const missingNames = () => STEPS.filter((st) => !scan.free.scans[st.color]).map((st) => COLOR_INFO[st.color].name);
+
+// Rotation (quarts de tour) qui aligne la grille vue maintenant sur la capture.
+function alignRotation(now, captured) {
+  let best = 0, bd = Infinity;
+  for (let k = 0; k < 4; k++) {
+    const g = rotateGrid(captured, k);
+    let d = 0;
+    for (let i = 0; i < 9; i++) d += labDist(g[i], now[i]);
+    if (d < bd) { bd = d; best = k; }
   }
-  if (r.status === 'ok') cube.orientTo(CubeObject.matrixQuaternion(transposeRot(r.Q)), 450);
-  // Consigne.
-  if (r.status === 'need2' || (r.status === 'none' && model.faces.size === 0)) {
-    freeHint('Montre-moi ton cube en biais, pour que je voie 2 ou 3 faces');
-  } else if (r.status === 'none') {
-    freeHint('Je ne vois plus le cube… remets-le devant la caméra');
-  } else if (r.status === 'reset') {
-    freeHint('Je reprends depuis le début', true);
-  } else if (r.status === 'lost' || r.status === 'ambiguous') {
-    freeHint('Tourne doucement… je me repère');
-  } else if (model.isComplete()) {
-    finishFree();
-    return;
-  } else {
-    const t = model.nextTarget();
-    if (t && t.local) {
-      const best = DIRECTION_HINTS.slice().sort((a, b) =>
-        (b.v[0] * t.local[0] + b.v[1] * t.local[1] + b.v[2] * t.local[2]) - (a.v[0] * t.local[0] + a.v[1] * t.local[1] + a.v[2] * t.local[2]))[0];
-      const name = t.face ? ` (face ${COLOR_INFO[t.face.color] ? COLOR_INFO[t.face.color].name : ''})` : '';
-      freeHint(`${best.icon} ${best.text}${t.missing < 9 && t.face ? name : ''}`);
+  return best;
+}
+
+// Faces voisines vues ensemble : « la face X touche la face Y par son côté s »,
+// exprimé dans l'image de la capture de X.
+function recordRelations(faces) {
+  for (const A of faces) {
+    const cA = scan.free.colorOf(A.cells[4].lab);
+    const cap = scan.free.scans[cA];
+    if (!cap) continue;
+    const k = alignRotation(A.cells.map((c) => c.lab), cap.labs);
+    for (const { face: B, side } of adjacentFaces(A, faces)) {
+      const cB = scan.free.colorOf(B.cells[4].lab);
+      if (!cB || cB === cA) continue;
+      const key = `${cB}:${(side - k + 4) % 4}`;
+      const votes = (scan.relVotes[cA] = scan.relVotes[cA] || {});
+      votes[key] = (votes[key] || 0) + 1;
+      if (votes[key] === 2) scan.relChanged = true;
     }
   }
 }
 
-function drawFreeOverlay(res, r) {
-  const ok = r.status === 'ok';
-  const mine = new Set((r.local || []).map((L) => L.det));
-  drawOverlay(res, null, (f) => (mine.has(f) ? (ok ? 'ok' : 'warn') : null));
+function relations() {
+  const out = {};
+  for (const [c, votes] of Object.entries(scan.relVotes)) {
+    out[c] = Object.entries(votes).filter(([, n]) => n >= 2).map(([k]) => {
+      const [n, side] = k.split(':');
+      return { n, side: +side };
+    });
+  }
+  return out;
+}
+
+// Mini-cube : faces capturées à leur place (schéma standard).
+function refreshMini(showColor = null) {
+  const css = new Array(54).fill('#3a3f4d');
+  for (const st of STEPS) {
+    const sc = scan.free.scans[st.color];
+    const f = FACES.indexOf(SLOT_OF[st.color]);
+    for (let k = 0; k < 9; k++) css[f * 9 + k] = sc ? `rgb(${sc.rgbs[k].join(',')})` : k === 4 ? COLOR_INFO[st.color].css + '66' : '#3a3f4d';
+  }
+  cube.setOverride(css);
+  const p = Object.keys(scan.free.scans).length;
+  $('mini-count').textContent = `${p} / 6 faces`;
+  $('mini-bar').style.width = `${Math.round((100 * p) / 6)}%`;
+  if (showColor) {
+    // Le mini-cube se tourne vers la face qu'on vient de capturer.
+    const slot = SLOT_OF[showColor];
+    cube.setView(slot, slot === 'U' ? 'B' : slot === 'D' ? 'F' : 'U', 600).then(() => {
+      setTimeout(() => { if (!scan.finishing) cube.spinning = true; }, 900);
+    });
+  }
+}
+
+function pickFreeFace(res) {
+  const usable = res.faces.filter((f) => !f.neighborOf && (f.members >= 5 || f.solid));
+  return usable.sort((a, b) => b.squareness * b.area - a.squareness * a.area)[0] || null;
+}
+
+function onFreeDetection(res) {
+  if (scan.finishing || !$('scan').classList.contains('active')) return;
+  scan.model.update(res.faces); // bonus 3D
+  recordRelations(res.faces);
+  // Faces entièrement connues par le modèle 3D : comptées comme capturées.
+  const fixed = fixedFromModel(scan.model);
+  let fresh = null;
+  for (const [slot, labs] of Object.entries(fixed)) {
+    const color = WESTERN_SLOTS[slot];
+    if (!scan.free.scans[color]) { scan.free.accept(color, labs, labs.map((l) => labToRgb(...l))); fresh = color; }
+  }
+  if (fresh) {
+    renderChips(scan.free);
+    refreshMini(fresh);
+    beep();
+    if (scan.free.done) { finishFree(); return; }
+  }
+  const now = performance.now();
+  drawOverlay(res, null, (f) => (f === scan.lastPick ? 'ok' : null));
+  // Il manque seulement l'orientation : on attend une vue de coin.
+  if (scan.free.done) {
+    if (scan.relChanged && !scan.resolving) { scan.relChanged = false; finishFree(); }
+    return;
+  }
+  const face = pickFreeFace(res);
+  scan.lastPick = face;
+  let progress = 0;
+  if (!face) {
+    scan.track = null;
+    freeHint(Object.keys(scan.free.scans).length ? `Montre-moi une autre face : ${missingNames().join(', ')}` : 'Montre-moi une face du cube, bien de face');
+  } else {
+    const id = scan.free.identify(face.cells[4].lab);
+    const areaFrac = face.area / (res.width * res.height);
+    if (id.status === 'already') {
+      scan.track = null;
+      freeHint(`Face ${COLOR_INFO[id.color].name} déjà vue ✓ — il reste : ${missingNames().join(', ')}`);
+    } else if (id.status !== 'ok') {
+      scan.track = null;
+      freeHint('Couleur du centre pas claire — évite les reflets');
+    } else if (areaFrac < 0.02) {
+      scan.track = null;
+      freeHint('Approche un peu le cube');
+    } else {
+      const labs = face.cells.map((c) => c.lab);
+      const t = scan.track;
+      const same = t && t.color === id.color && t.frames[t.frames.length - 1].every((l, k) => labDist(l, labs[k]) < 14);
+      if (same) t.frames.push(labs);
+      else scan.track = { color: id.color, frames: [labs], t0: now };
+      const tr = scan.track;
+      const fingers = face.cells.some((c) => looksLikeSkin(c.lab, scan.free));
+      if (fingers) tr.skin = (tr.skin || 0) + 1;
+      const needMs = STABLE_MS + (tr.skin ? 1200 : 0);
+      progress = Math.min(1, tr.frames.length / STABLE_FRAMES, (now - tr.t0) / needMs);
+      freeHint(fingers ? 'Attention : un doigt cache peut-être une case' : `Face ${COLOR_INFO[id.color].name} — ne bouge plus…`, true);
+      if (tr.frames.length >= STABLE_FRAMES && now - tr.t0 >= needMs) captureFree(tr);
+    }
+  }
+  $('stability-bar').style.width = `${Math.round(progress * 100)}%`;
+}
+
+function captureFree(track) {
+  const labs = Array.from({ length: 9 }, (_, k) => medianLab(track.frames.map((f) => f[k])));
+  scan.free.accept(track.color, labs, labs.map((l) => labToRgb(...l)));
+  scan.track = null;
+  const fl = $('flash');
+  fl.classList.add('on');
+  requestAnimationFrame(() => requestAnimationFrame(() => fl.classList.remove('on')));
+  if (navigator.vibrate) navigator.vibrate(60);
+  beep();
+  renderChips(scan.free);
+  refreshMini(track.color);
+  $('stability-bar').style.width = '0%';
+  const left = missingNames();
+  freeHint(left.length ? `Face ${COLOR_INFO[track.color].name} ✓ — encore : ${left.join(', ')}` : 'Toutes les faces sont là ✓', true);
+  if (scan.free.done) setTimeout(finishFree, 400);
 }
 
 // Couleur (W/Y/R/O/B/G) de chaque face du solveur d'après la teinte des centres.
@@ -486,30 +592,48 @@ function slotKeysFromLabs(labs) {
   return out;
 }
 
-function finishFree() {
-  const res = scan.model.solve();
+async function finishFree() {
+  if (scan.resolving) return;
+  scan.resolving = true;
+  if (!scan.waitSince) freeHint('Je reconstitue ton cube…', true);
+  const loose = Object.fromEntries(Object.entries(scan.free.scans).map(([c, sc]) => [c, sc.labs]));
+  const res = await resolveHybrid(loose, fixedFromModel(scan.model), { relations: relations() });
+  scan.resolving = false;
+  if (!res || scan.finishing) return;
   const slotKey = slotKeysFromLabs(res.labs);
   const result = { facelets: res.facelets, uncertain: res.uncertain, corrected: res.corrected, slotKey };
-  const doubtful = !res.valid.ok || res.corrected || res.uncertain.size > 2;
+  // Plusieurs lectures possibles (cube presque résolu…) : une vue de coin
+  // suffit à trancher.
+  if (res.valid.ok && res.ambiguous) {
+    scan.waitSince = scan.waitSince || performance.now();
+    if (performance.now() - scan.waitSince < 20000) {
+      freeHint('↻ Presque fini ! Montre-moi un coin du cube, avec deux faces visibles', true);
+      return;
+    }
+  }
+  const doubtful = !res.valid.ok || res.corrected || res.uncertain.size > 3;
   if (doubtful && (scan.retries || 0) < 2) {
-    // Quelques cases douteuses : on les efface et on les fait remesurer,
-    // sans quitter la caméra.
+    // La face la plus douteuse est à remontrer.
     scan.retries = (scan.retries || 0) + 1;
-    const idx = res.uncertain.size ? [...res.uncertain] : res.refs.map((_, i) => i).filter((i) => i % 9 !== 4);
-    const faces = scan.model.forget(idx.map((i) => res.refs[i]));
-    const names = faces.map((f) => (COLOR_INFO[f.color] ? COLOR_INFO[f.color].name : '')).filter(Boolean);
-    freeHint(`Je vérifie… montre-moi encore la face ${names.slice(0, 2).join(' et la face ')}`, true);
-    return;
+    const counts = {};
+    const idx = res.uncertain.size ? [...res.uncertain] : [];
+    for (const i of idx) { const c = slotKey[FACES[Math.floor(i / 9)]]; counts[c] = (counts[c] || 0) + 1; }
+    const worst = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+    const color = worst ? worst[0] : null;
+    if (color && scan.free.scans[color]) {
+      delete scan.free.scans[color];
+      scan.free.history = scan.free.history.filter((c) => c !== color);
+      renderChips(scan.free);
+      refreshMini();
+      freeHint(`Remontre-moi la face ${COLOR_INFO[color].name}, bien de face`, true);
+      return;
+    }
   }
   scan.finishing = true;
   stopScan();
   if (navigator.vibrate) navigator.vibrate([60, 60, 120]);
   beep();
-  if (doubtful) {
-    // Toujours des doutes : on laisse l'utilisateur vérifier.
-    openReview(result);
-    return;
-  }
+  if (doubtful || res.ambiguous) { openReview(result); return; }
   celebrateScan(result);
 }
 
@@ -550,7 +674,7 @@ async function importPhoto(file) {
 function initScan() {
   $('scan-back').onclick = () => { stopScan(); goHome(); };
   $('scan-mode').onclick = () => startScan(scan.mode === 'free' ? 'guided' : 'free');
-  $('scan-restart').onclick = () => startScan('free');
+  $('scan-restart').onclick = () => { scan.scanner && scan.scanner.running ? startScan('free') : startScan('free'); };
   $('scan-undo').onclick = () => {
     const c = scan.session.undo();
     if (c) setHint(`Face ${COLOR_INFO[c].name} effacée`);

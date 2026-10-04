@@ -43,7 +43,9 @@ export function roughColor(lab) {
 }
 
 export class ScanSession {
-  constructor() {
+  // anyOrder : faces acceptées dans n'importe quel ordre (mode libre).
+  constructor({ anyOrder = false } = {}) {
+    this.anyOrder = anyOrder;
     this.scans = {}; // couleur -> { labs: [9], rgbs: [9] } (ordre image)
     this.history = [];
   }
@@ -88,14 +90,14 @@ export class ScanSession {
       if (!this.scans[other] && labDist(centerLab, this.scans[rough].labs[4]) > 10) color = other;
     }
     let group = STEPS.find((s) => s.color === color).group;
-    if (this.scans[color] || group !== step.group) {
+    if (this.scans[color] || (!this.anyOrder && group !== step.group)) {
       // Teinte ambiguë (orange/jaune, rouge/orange…) : si une couleur encore
       // attendue dans cette étape est proche, c'est sans doute elle.
-      const alt = this.ambiguousAlternative(centerLab, step.group);
+      const alt = this.ambiguousAlternative(centerLab, this.anyOrder ? null : step.group);
       if (alt) return { color: alt, status: 'ok' };
     }
     if (this.scans[color]) return { color, status: 'already' };
-    if (group !== step.group) return { color, status: 'later' };
+    if (!this.anyOrder && group !== step.group) return { color, status: 'later' };
     return { color, status: 'ok' };
   }
 
@@ -106,7 +108,7 @@ export class ScanSession {
     if (c < 25) return null;
     let best = null;
     for (const st of STEPS) {
-      if (st.group !== group || this.scans[st.color] || !(st.color in HUE)) continue;
+      if ((group && st.group !== group) || this.scans[st.color] || !(st.color in HUE)) continue;
       let d = Math.abs(h - HUE[st.color]);
       d = Math.min(d, 360 - d);
       if (d <= 24 && (!best || d < best.d)) best = { color: st.color, d };

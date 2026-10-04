@@ -177,3 +177,9 @@ button.icon { width: 44px; height: 44px; padding: 0; border-radius: 50%; display
 /* Calques décoratifs : ne bloquent jamais les appuis. */
 .screen.active > .flash, .screen.active > .done-banner, .screen.active > .celebrate { pointer-events: none; }
 .screen.active > .celebrate > * { pointer-events: auto; }
+
+/* Pastilles : à gauche en mode libre (le mini-cube occupe la droite). */
+#scan.free .steps { justify-content: flex-start; padding-right: 150px; gap: 5px; }
+#scan:not(.free) .steps { padding-right: 0; }
+#scan.free .step { width: 26px; height: 26px; border-radius: 7px; }
+.step.done { border-color: var(--ok); }

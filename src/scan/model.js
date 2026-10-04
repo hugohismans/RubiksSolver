@@ -353,8 +353,10 @@ export class CubeModel {
       const toBody = (v) => add(add(mul(nR, v[0]), mul(U.n, v[1])), mul(F.n, v[2]));
       const n = toBody(g.normal), p = add(toBody(g.pos), mul(n, 0.5));
       const f = this.faces.get(key(n));
+      if (!f) { refs[i] = { face: null, k: -1 }; labs[i] = null; return; }
       refs[i] = { face: f, k: cellIndex(f, p) };
-      labs[i] = this.cellEstimate(f, refs[i].k).lab;
+      const e = this.cellEstimate(f, refs[i].k);
+      labs[i] = e ? e.lab : null;
     });
     // Couleur (W/Y/R/O/B/G) de chaque face du solveur, pour l'affichage.
     const slotFace = {};
