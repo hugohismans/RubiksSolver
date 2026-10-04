@@ -3,7 +3,7 @@
 // Usage : node tests/free-scan-sim.js [style] [palette] [seed]
 import Cube from 'cubejs';
 import { generate } from './lib/synth.js';
-import { detectFaces } from '../src/vision/detector.js';
+import { detectMultiScale } from '../src/vision/multiscale.js';
 import { CubeModel } from '../src/scan/model.js';
 
 const COLOR = { U: 'W', R: 'R', F: 'G', D: 'Y', L: 'O', B: 'B' };
@@ -25,10 +25,13 @@ export function simulate({ style = 'stickerless', palette = 'neon', seed = 1, st
   const model = new CubeModel();
   model.debug = !!process.env.DEBUG_MODEL;
   const poses = trajectory();
+  let roi = null;
   let done = -1, stats = { ok: 0, lost: 0, ambiguous: 0, none: 0, need2: 0, reset: 0 };
   for (let k = 0; k < poses.length; k++) {
     const { image } = generate(seed, { width: 300, height: 400, style, palette, cube: { state, front: 'F', top: 'U', colorOfSlot: COLOR }, pose: poses[k], tilt: 3, faceFrac: 0.4, logo: true, poseSeed: k, hand: true, background: 'tiles' });
-    const res = model.update(detectFaces(image).faces);
+    const det = detectMultiScale(image, { hint: roi, trackOnly: !!roi && k % 4 !== 0 });
+    roi = det.roi;
+    const res = model.update(det.faces);
     stats[res.status]++;
     if (verbose) {
       const p = model.progress();

@@ -482,6 +482,8 @@ export function detectFaces(image, options = {}) {
     const face = solidFace(b, lab, G, W, Hh, cands);
     if (face) faces.push(face);
   }
+  // Faces voisines très inclinées : complétées à partir d'une face sûre.
+  faces.push(...completeNeighbors(faces, cands, lab, W, Hh));
   faces.sort((a, b) => b.score - a.score);
   return { faces, candidates: cands, width: W, height: Hh };
 }
@@ -510,6 +512,20 @@ function buildFace(res, cands, lab, W, Hh, cfg) {
   if (rows.size < 3 || cols.size < 3) return null;
   fit = fitLattice(inside, cands);
   if (!fit || fit.members.length < cfg.minMembers) return null;
+  // Cohérence plane : sur une vue de coin, une rangée de la face voisine peut
+  // s'aligner avec la grille. Ses stickers n'ont alors pas la même orientation
+  // que celle prévue par l'homographie : on les retire et on réajuste.
+  for (let iter = 0; iter < 3; iter++) {
+    const devs = fit.members.map((m) => axisDeviation(cands[m.idx], fit.H, m.i, m.j));
+    if (globalThis.__dbgDev) console.log("écarts", fit.members.map((m, k) => `${m.i},${m.j}:${devs[k].toFixed(0)}`).join(" "));
+    const worst = devs.indexOf(Math.max(...devs));
+    if (devs[worst] < 14) break;
+    const rest = fit.members.filter((_, k) => k !== worst);
+    const rows = new Set(rest.map((m) => m.j)), cols = new Set(rest.map((m) => m.i));
+    if (rest.length < cfg.minMembers || rows.size < 3 || cols.size < 3) return null;
+    fit = fitLattice(rest, cands);
+    if (!fit || fit.members.length < cfg.minMembers) return null;
+  }
   return finishFace(fit.H, lab, W, Hh, {
     allCands: cands,
     members: fit.members.length, residual: fit.residual, memberCands: fit.members.map((m) => cands[m.idx]),
@@ -571,13 +587,13 @@ function finishFace(H, lab, W, Hh, info) {
       }
     }
   }
-  if (ringTwins >= 3 || (ringTwins >= 1 && ringTot >= 6 && ringSame >= Math.max(6, ringTot * 0.6))) return null;
+  if (!info.neighbor && (ringTwins >= 3 || (ringTwins >= 1 && ringTot >= 6 && ringSame >= Math.max(6, ringTot * 0.6)))) return null;
   // Face unie : il faut en plus que l'extérieur soit différent (sinon c'est
   // probablement un morceau de sol ou de mur).
   if (info.solid && ringTot >= 4 && ringSame >= ringTot * 0.5) return null;
   let spread = 0;
   for (let a = 0; a < 9; a++) for (let b = a + 1; b < 9; b++) spread = Math.max(spread, labDist(grid[a].lab, grid[b].lab));
-  if (spread < 12 && ringTot >= 6 && ringSame >= Math.max(6, ringTot * 0.6)) return null;
+  if (!info.neighbor && spread < 12 && ringTot >= 6 && ringSame >= Math.max(6, ringTot * 0.6)) return null;
   const cells = [];
   for (let r = 0; r < 3; r++) {
     for (let c = 0; c < 3; c++) {
@@ -605,7 +621,7 @@ function finishFace(H, lab, W, Hh, info) {
     4 * squareness - 5 * fit.residual - (gray ? 4 : 0);
   return {
     H, cells, corners, area, roll: orient.roll, center: [cx, cy], squareness, uniform,
-    members: info.members, residual: info.residual, score, memberCands: info.memberCands, solid: !!info.solid,
+    members: info.members, residual: info.residual, score, memberCands: info.memberCands, solid: !!info.solid, predicted: !!info.neighbor,
   };
 }
 
@@ -672,7 +688,94 @@ function solidFace(b, lab, G, W, Hh, cands) {
   }
   if (dark < 3 && grooves < 8) return null;
   if (dark < 2) return null;
+  // Une main (peau) peut ressembler à une face unie : on l'écarte.
+  const centerLab = [lab.L, lab.A, lab.B].map((P) => { const [x, y] = applyH(H, 1, 1); return P[Math.round(y) * W + Math.round(x)]; });
+  const ch = Math.hypot(centerLab[1], centerLab[2]), hue = (Math.atan2(centerLab[2], centerLab[1]) * 180) / Math.PI;
+  if (ch > 10 && ch < 36 && hue > 15 && hue < 80) return null;
   return finishFace(H, lab, W, Hh, { members: 0, residual: 0.05, memberCands: [b], solid: true, allCands: cands });
+}
+
+// Complète une face voisine très inclinée (souvent mal segmentée sur un cube
+// sans stickers) : l'arête commune avec une face sûre fixe deux coins de sa
+// grille ; deux stickers isolés suffisent alors à déterminer le reste.
+function completeNeighbors(faces, cands, lab, W, Hh) {
+  const used = new Set(faces.flatMap((f) => f.memberCands || []));
+  const out = [];
+  for (const A of faces) {
+    if (A.solid || A.members < 6) continue;
+    const cellA = Math.abs(A.area) / 9;
+    for (let p = 0; p < 4; p++) {
+      const E0 = A.corners[p], E1 = A.corners[(p + 1) % 4];
+      const ex = E1[0] - E0[0], ey = E1[1] - E0[1], len = Math.hypot(ex, ey);
+      const mid = [(E0[0] + E1[0]) / 2, (E0[1] + E1[1]) / 2];
+      let n = [ey / len, -ex / len];
+      if ((A.center[0] - mid[0]) * n[0] + (A.center[1] - mid[1]) * n[1] > 0) n = [-n[0], -n[1]];
+      const beyond = (q) => (q[0] - mid[0]) * n[0] + (q[1] - mid[1]) * n[1];
+      const along = (q) => ((q[0] - mid[0]) * ex + (q[1] - mid[1]) * ey) / len;
+      // Déjà une face de ce côté ?
+      if ([...faces, ...out].some((f) => f !== A && beyond(f.center) > 0 && Math.hypot(f.center[0] - mid[0], f.center[1] - mid[1]) < len * 1.2)) continue;
+      const pool = cands.filter((c) => {
+        if (used.has(c)) return false;
+        const b = beyond([c.cx, c.cy]);
+        return b > 0.04 * len && b < 1.1 * len && Math.abs(along([c.cx, c.cy])) < 0.6 * len && c.area < cellA * 1.6 && c.area > cellA * 0.06;
+      });
+      if (pool.length < 2) continue;
+      // Grille de la voisine : son bord bas est l'arête commune (BG = E0, BD = E1).
+      const anchorsSrc = [[-0.5, 2.5], [2.5, 2.5]], anchorsDst = [E0, E1];
+      let best = null;
+      for (const c of pool) for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) {
+        const Aff = fitAffine([...anchorsSrc, [i, j]], [...anchorsDst, [c.cx, c.cy]]);
+        const Ai = Aff && invert3(Aff);
+        if (!Ai) continue;
+        const sup = [];
+        for (const d of pool) {
+          const [x, y] = applyH(Ai, d.cx, d.cy);
+          const ii = Math.round(x), jj = Math.round(y);
+          if (ii < 0 || ii > 2 || jj < 0 || jj > 2 || Math.hypot(x - ii, y - jj) > 0.25) continue;
+          const ar = d.area / cellArea(Aff, ii, jj);
+          if (ar < 0.25 || ar > 1.3 || sup.some((s) => s.i === ii && s.j === jj)) continue;
+          sup.push({ c: d, i: ii, j: jj });
+        }
+        // Il faut au moins deux rangées différentes pour fixer la profondeur.
+        const rows = new Set(sup.map((s) => s.j)).size;
+        const sc = sup.length + (rows >= 2 ? 1 : 0);
+        if (sup.length >= 2 && (rows >= 2 || sup.length >= 3) && (!best || sc > best.sc)) best = { sup, sc };
+      }
+      if (!best) continue;
+      const src = [...anchorsSrc, ...best.sup.map((s) => [s.i, s.j])];
+      const dst = [...anchorsDst, ...best.sup.map((s) => [s.c.cx, s.c.cy])];
+      const H = fitHomography(src, dst);
+      if (!H) continue;
+      const Hi = invert3(H);
+      if (!Hi) continue;
+      const res = best.sup.map((s) => { const [x, y] = applyH(Hi, s.c.cx, s.c.cy); return Math.hypot(x - s.i, y - s.j); });
+      const residual = res.reduce((t, r) => t + r, 0) / res.length;
+      if (Math.max(...res) > 0.3) continue;
+      // Profondeur plausible : le bord opposé n'est ni collé ni trop loin.
+      const far = applyH(H, 1, -0.5);
+      const depth = beyond(far) / len;
+      if (!(depth > 0.15 && depth < 1.3)) continue;
+      const face = finishFace(H, lab, W, Hh, { members: best.sup.length, residual, memberCands: best.sup.map((s) => s.c), allCands: cands, neighbor: true });
+      if (!face || !looksLikeStickers(face.cells)) continue;
+      face.neighborOf = A;
+      out.push(face);
+      best.sup.forEach((s) => used.add(s.c));
+    }
+  }
+  return out;
+}
+
+// Les cases ressemblent-elles à des stickers (et pas à du carrelage gris ou
+// à une main) ? Couleurs vives majoritaires, pas de peau, cases homogènes.
+function looksLikeStickers(cells) {
+  let vivid = 0, skin = 0, blurry = 0;
+  for (const c of cells) {
+    const ch = Math.hypot(c.lab[1], c.lab[2]), h = (Math.atan2(c.lab[2], c.lab[1]) * 180) / Math.PI;
+    if (ch >= 28) vivid++;
+    if (ch > 10 && ch < 36 && h > 15 && h < 80) skin++;
+    if (c.conf < 0.5) blurry++;
+  }
+  return vivid >= 5 && skin <= 1 && blurry <= 2;
 }
 
 function cellShapeRatio(c, H, i, j) {
@@ -691,6 +794,24 @@ function cellShapeRatio(c, H, i, j) {
   // Les deux axes doivent correspondre à deux directions différentes.
   if (!out[0] || !out[1]) return null;
   return out;
+}
+
+// Écart angulaire (degrés) entre les axes du quadrilatère d'un candidat et
+// les directions de la case (i, j) prévues par H.
+function axisDeviation(c, H, i, j) {
+  const p0 = applyH(H, i - 0.5, j), p1 = applyH(H, i + 0.5, j);
+  const q0 = applyH(H, i, j - 0.5), q1 = applyH(H, i, j + 0.5);
+  const dirs = [[p1[0] - p0[0], p1[1] - p0[1]], [q1[0] - q0[0], q1[1] - q0[1]]];
+  let worst = 0;
+  for (const w of [c.u, c.v]) {
+    let best = 90;
+    for (const d of dirs) {
+      const cos = Math.abs(w[0] * d[0] + w[1] * d[1]) / (Math.hypot(...w) * Math.hypot(...d));
+      best = Math.min(best, (Math.acos(Math.min(1, cos)) * 180) / Math.PI);
+    }
+    worst = Math.max(worst, best);
+  }
+  return worst;
 }
 
 function cellArea(H, i, j) {

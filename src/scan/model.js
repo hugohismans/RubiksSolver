@@ -120,9 +120,11 @@ export class CubeModel {
   // Construit la vue locale à partir des faces détectées dans une image.
   localView(detected) {
     if (!detected.length) return [];
-    const usable = detected.filter((f) => f.members >= 5 || f.solid);
+    const usable = detected.filter((f) => f.members >= 5 || f.solid || f.neighborOf);
     if (!usable.length) return [];
-    const anchor = usable.slice().sort((a, b) => b.squareness * b.area - a.squareness * a.area)[0];
+    // L'ancre est une face détectée directement (pas complétée), la plus de face.
+    const direct = usable.filter((f) => !f.neighborOf);
+    const anchor = (direct.length ? direct : usable).slice().sort((a, b) => b.squareness * b.area - a.squareness * a.area)[0];
     const placed = new Map([[anchor, { n: [0, 0, 1], ex: [1, 0, 0], ey: [0, -1, 0] }]]);
     const queue = [anchor];
     while (queue.length) {
@@ -151,8 +153,11 @@ export class CubeModel {
       const M = this.faces.get(key(nb));
       if (M) {
         const dc = labDist(L.labs[4], M.centerLab);
-        if (dc > 40) return null;
-        centerPen += Math.max(0, dc - 10);
+        const weak = this.faceWeight(M) < 1.5;
+        if (dc > 40 && !weak) return null;
+        // Face encore mal connue : un désaccord n'est pas éliminatoire.
+        centerPen += weak ? Math.min(15, Math.max(0, dc - 10)) : Math.max(0, dc - 10);
+        if (weak && dc > 30) continue;
         matched++;
         const exb = apply(Q, L.ex), eyb = apply(Q, L.ey);
         for (let k = 0; k < 9; k++) {
@@ -171,6 +176,10 @@ export class CubeModel {
     if (!matched) return null;
     const stick = compared ? cost / compared : 12;
     return { cost: stick, score: stick + centerPen, matched, compared };
+  }
+
+  faceWeight(face) {
+    return face.cells[4].reduce((t, x) => t + x.w, 0);
   }
 
   cellEstimate(face, k) {
@@ -237,6 +246,13 @@ export class CubeModel {
     for (const L of local) {
       const nb = apply(Q, L.n);
       let M = this.faces.get(key(nb));
+      const predicted = !!(L.det && L.det.neighborOf);
+      // Face peu mesurée contredite par une détection directe : on la refait.
+      if (M && !predicted && this.faceWeight(M) < 1.5 && labDist(L.labs[4], M.centerLab) > 30) {
+        this.faces.delete(key(nb));
+        M = null;
+      }
+      if (!M && predicted) continue; // une face complétée ne crée pas de face
       if (!M) {
         M = { n: nb, ex: apply(Q, L.ex), ey: apply(Q, L.ey), cells: Array.from({ length: 9 }, () => []), centerLab: L.labs[4] };
         M.color = roughColor(L.labs[4]);
@@ -244,7 +260,8 @@ export class CubeModel {
       }
       if (L.weight < MIN_SQUARENESS) continue;
       const exb = apply(Q, L.ex), eyb = apply(Q, L.ey);
-      const w = L.weight * L.weight;
+      // Une face complétée (déduite d'une voisine) est moins sûre.
+      const w = L.weight * L.weight * (L.det && L.det.neighborOf ? 0.4 : 1);
       for (let k = 0; k < 9; k++) {
         const p = add(mul(nb, 1.5), add(mul(exb, (k % 3) - 1), mul(eyb, Math.floor(k / 3) - 1)));
         const idx = cellIndex(M, p);
@@ -331,23 +348,32 @@ export class CubeModel {
     const neighbors = faces.filter((f) => dot(f.n, U.n) === 0);
     const F = neighbors.find((f) => f.color === 'G') || neighbors[0];
     const nR = cross(U.n, F.n);
-    const labs = new Array(54);
+    const labs = new Array(54), refs = new Array(54);
     FACELET_GEOMETRY.forEach((g, i) => {
       const toBody = (v) => add(add(mul(nR, v[0]), mul(U.n, v[1])), mul(F.n, v[2]));
       const n = toBody(g.normal), p = add(toBody(g.pos), mul(n, 0.5));
       const f = this.faces.get(key(n));
-      labs[i] = this.cellEstimate(f, cellIndex(f, p)).lab;
+      refs[i] = { face: f, k: cellIndex(f, p) };
+      labs[i] = this.cellEstimate(f, refs[i].k).lab;
     });
     // Couleur (W/Y/R/O/B/G) de chaque face du solveur, pour l'affichage.
     const slotFace = {};
     FACES.forEach((s, i) => { slotFace[s] = labs[i * 9 + 4]; });
-    return { labs, slotLabs: slotFace };
+    return { labs, refs, slotLabs: slotFace };
   }
 
   solve() {
-    const { labs } = this.toSolverLabs();
+    const { labs, refs } = this.toSolverLabs();
     const res = assignColors(labs);
-    return { ...res, labs };
+    return { ...res, labs, refs };
+  }
+
+  // Oublie les mesures de certaines cases (douteuses) pour les faire
+  // remesurer. Renvoie les faces concernées.
+  forget(refs) {
+    const faces = new Set();
+    for (const { face, k } of refs) { face.cells[k] = []; faces.add(face); }
+    return [...faces];
   }
 }
 

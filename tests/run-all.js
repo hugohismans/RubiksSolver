@@ -12,6 +12,8 @@ import { detectFaces } from '../src/vision/detector.js';
 import { generate, COLORS } from './lib/synth.js';
 import { rgbToLab, labDist } from '../src/vision/color.js';
 import { simulate } from './free-scan-sim.js';
+import { detectMultiScale } from '../src/vision/multiscale.js';
+import { roughColor } from '../src/scan/model.js';
 import { fold, ROTATIONS } from '../src/scan/model.js';
 
 let failed = 0;
@@ -71,6 +73,17 @@ const check = (name, ok, detail = '') => {
     });
   }
   check('détecteur : images synthétiques', found >= N * 0.85, `${found}/${N} faces trouvées, ${fp} faux positifs, ${((100 * ok) / cells).toFixed(1)}% cases bien lues`);
+}
+
+// 3b. Photos réelles en vue de coin (GAN sans stickers) : deux faces par photo,
+// centres vérifiés à l'œil.
+{
+  const expect = { 1: ['G', 'Y'], 2: ['G', 'W'], 3: ['B', 'R'] };
+  for (const [i, centers] of Object.entries(expect)) {
+    const r = detectMultiScale(resize(loadImage(`tests/fixtures/real-${i}.jpg`), 960));
+    const got = r.faces.map((f) => roughColor(f.cells[4].lab)).sort();
+    check(`photo réelle ${i} (vue de coin)`, got.join() === centers.slice().sort().join(), `centres lus : ${got.join(' ') || 'aucun'}`);
+  }
 }
 
 // 4. Scan libre (modèle 3D)

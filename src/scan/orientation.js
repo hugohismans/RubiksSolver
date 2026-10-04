@@ -21,7 +21,8 @@ export function adjacentFaces(main, faces) {
     if (f === main) continue;
     // Seules les faces voisines bien formées comptent (évite les faux réseaux
     // mêlant des stickers et le décor).
-    if (f.solid || f.members < 6 || (f.residual ?? 0) > 0.08) continue;
+    const linked = f.neighborOf === main || main.neighborOf === f;
+    if (!linked && (f.solid || f.members < 6 || (f.residual ?? 0) > 0.08)) continue;
     let best = null;
     for (let e = 0; e < 4; e++) {
       const a = mc[e], b = mc[(e + 1) % 4];

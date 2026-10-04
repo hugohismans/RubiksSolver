@@ -5,7 +5,7 @@ import { Scanner } from './scan/scanner.js';
 import { ScanSession, STEPS, COLOR_INFO, slotColors } from './scan/session.js';
 import { scanToCanonical, FACES, SOLVED, validateFacelets, parseMoves, applyMoves } from './cube/cube.js';
 import { labDist, labToRgb, chroma, hueDeg } from './vision/color.js';
-import { detectFaces } from './vision/detector.js';
+import { detectMultiScale } from './vision/multiscale.js';
 import { solve, warmUp } from './solver/solver.js';
 import { adjacentFaces, topFromNeighbor } from './scan/orientation.js';
 import { CubeModel, transposeRot } from './scan/model.js';
@@ -64,6 +64,7 @@ async function startScan(mode = scan.mode || 'free') {
   scan.track = null;
   scan.model = new CubeModel();
   scan.finishing = false;
+  scan.retries = 0;
   scan.hint = { text: '', t: 0 };
   if (mode === 'free') {
     if (!scan.mini) scan.mini = new Cube3D($('mini-cube'), { interactive: false, distance: 11 });
@@ -440,15 +441,26 @@ function slotKeysFromLabs(labs) {
 }
 
 function finishFree() {
-  scan.finishing = true;
   const res = scan.model.solve();
   const slotKey = slotKeysFromLabs(res.labs);
   const result = { facelets: res.facelets, uncertain: res.uncertain, corrected: res.corrected, slotKey };
+  const doubtful = !res.valid.ok || res.corrected || res.uncertain.size > 2;
+  if (doubtful && (scan.retries || 0) < 2) {
+    // Quelques cases douteuses : on les efface et on les fait remesurer,
+    // sans quitter la caméra.
+    scan.retries = (scan.retries || 0) + 1;
+    const idx = res.uncertain.size ? [...res.uncertain] : res.refs.map((_, i) => i).filter((i) => i % 9 !== 4);
+    const faces = scan.model.forget(idx.map((i) => res.refs[i]));
+    const names = faces.map((f) => (COLOR_INFO[f.color] ? COLOR_INFO[f.color].name : '')).filter(Boolean);
+    freeHint(`Je vérifie… montre-moi encore la face ${names.slice(0, 2).join(' et la face ')}`, true);
+    return;
+  }
+  scan.finishing = true;
   stopScan();
   if (navigator.vibrate) navigator.vibrate([60, 60, 120]);
   beep();
-  if (!res.valid.ok || res.uncertain.size > 6) {
-    // Quelque chose cloche : on laisse l'utilisateur vérifier.
+  if (doubtful) {
+    // Toujours des doutes : on laisse l'utilisateur vérifier.
     openReview(result);
     return;
   }
@@ -469,13 +481,13 @@ function finishFree() {
 // Import d'une photo (secours si pas de caméra, ou pour tester).
 async function importPhoto(file) {
   const bmp = await createImageBitmap(file);
-  const s = Math.min(1, 480 / Math.max(bmp.width, bmp.height));
+  const s = Math.min(1, 1280 / Math.max(bmp.width, bmp.height));
   const cv = document.createElement('canvas');
   cv.width = Math.round(bmp.width * s);
   cv.height = Math.round(bmp.height * s);
   const ctx = cv.getContext('2d', { willReadFrequently: true });
   ctx.drawImage(bmp, 0, 0, cv.width, cv.height);
-  const res = detectFaces(ctx.getImageData(0, 0, cv.width, cv.height));
+  const res = detectMultiScale(ctx.getImageData(0, 0, cv.width, cv.height), { base: 480 });
   const pick = pickFace(res);
   if (!pick || pick.id.status !== 'ok') {
     setHint(pick ? `Photo : face ${COLOR_INFO[pick.id.color]?.name || '?'} non attendue ici` : 'Photo : aucune face reconnue');

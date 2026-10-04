@@ -18,7 +18,7 @@ await page.goto(base);
 await page.click('#btn-scan');
 const t0 = Date.now();
 let shots = 0, state = null;
-while (Date.now() - t0 < 120000) {
+while (Date.now() - t0 < (+process.env.TIMEOUT || 120000)) {
   await page.waitForTimeout(1000);
   state = await page.evaluate(() => ({
     screen: document.querySelector('.screen.active').id,
@@ -33,6 +33,16 @@ while (Date.now() - t0 < 120000) {
 }
 await page.waitForTimeout(1500);
 await page.screenshot({ path: 'tests/out/free-end.png' });
+if (state.screen === 'scan') {
+  // Diagnostic : état du modèle 3D.
+  console.log(await page.evaluate(() => {
+    const m = window.__app.scan.model;
+    return [...m.faces.values()].map((f) => `${f.color} ${f.n} ` + [...Array(9).keys()].map((k) => {
+      const e = m.cellEstimate(f, k);
+      return (m.cellKnown(f, k) ? '■' : '□') + (e ? `${e.n}/${e.w.toFixed(1)}` : '0');
+    }).join(' ')).join('\n');
+  }));
+}
 const got = await page.evaluate(() => window.__app.review.facelets && window.__app.review.facelets.join(''));
 console.log('écran final :', state.screen);
 console.log('attendu :', expected);

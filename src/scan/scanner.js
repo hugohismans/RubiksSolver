@@ -1,6 +1,7 @@
 // Caméra + boucle de détection (dans un worker) + dessin de l'incrustation.
 
-const MAX_SIDE = 400; // résolution d'analyse (côté le plus long)
+const CAPTURE_SIDE = 960; // image envoyée au worker (pour le zoom sur le cube)
+const BASE_SIDE = 400; // résolution de la passe rapide (repère des résultats)
 
 export class Scanner {
   constructor(video, overlay, { onResult, debug = false } = {}) {
@@ -55,18 +56,22 @@ export class Scanner {
     requestAnimationFrame(() => this.loop());
     const v = this.video;
     if (this.busy || v.readyState < 2 || !v.videoWidth) return;
-    const s = Math.min(1, MAX_SIDE / Math.max(v.videoWidth, v.videoHeight));
+    const s = Math.min(1, CAPTURE_SIDE / Math.max(v.videoWidth, v.videoHeight));
     const w = Math.round(v.videoWidth * s), h = Math.round(v.videoHeight * s);
     if (this.work.width !== w || this.work.height !== h) { this.work.width = w; this.work.height = h; }
     this.workCtx.drawImage(v, 0, 0, w, h);
     const img = this.workCtx.getImageData(0, 0, w, h);
     this.busy = true;
-    this.scale = s;
-    this.worker.postMessage({ id: ++this.frameId, width: w, height: h, buffer: img.data.buffer, debug: this.debug }, [img.data.buffer]);
+    // Les résultats sont exprimés dans l'image réduite (côté max BASE_SIDE).
+    this.scale = Math.min(1, BASE_SIDE / Math.max(v.videoWidth, v.videoHeight));
+    this.worker.postMessage({ id: ++this.frameId, width: w, height: h, buffer: img.data.buffer, debug: this.debug, base: BASE_SIDE }, [img.data.buffer]);
   }
 
   handle(res) {
     this.busy = false;
+    // Lien « face complétée -> face d'origine » (les objets ne survivent pas
+    // au passage par le worker, on les relie par indice).
+    for (const f of res.faces || []) if (f.neighborIdx >= 0) f.neighborOf = res.faces[f.neighborIdx];
     this.last = res;
     this.onResult && this.onResult(res);
   }
