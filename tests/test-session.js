@@ -3,16 +3,20 @@
 import Cube from 'cubejs';
 import { ScanSession, STEPS, slotColors } from '../src/scan/session.js';
 import { rgbToLab } from '../src/vision/color.js';
-import { FACES, CANONICAL_NEIGHBORS, rotateGrid } from '../src/cube/cube.js';
+import { FACES, CANONICAL_NEIGHBORS, rotateGrid, applyMoves, SOLVED } from '../src/cube/cube.js';
 import { PALETTES } from './lib/synth.js';
 
 const SLOT = { W: 'U', R: 'R', G: 'F', Y: 'D', O: 'L', B: 'B' };
 const COLOR = Object.fromEntries(Object.entries(SLOT).map(([c, s]) => [s, c]));
 
-export function run(n = 200, rotateExtra = false) {
+export function run(n = 200, rotateExtra = false, nearSolved = false) {
   let ok = 0, okSwap = 0, identOk = 0, identTot = 0;
   for (let t = 0; t < n; t++) {
-    const state = Cube.random().asString();
+    // nearSolved : cube presque résolu (1 à 4 coups), le cas où le schéma
+    // miroir est lui aussi « possible ».
+    const state = nearSolved
+      ? applyMoves(SOLVED, Array.from({ length: 1 + (t % 4) }, () => 'URFDLB'[(Math.random() * 6) | 0] + ['', "'", '2'][(Math.random() * 3) | 0]).join(' '))
+      : Cube.random().asString();
     const pal = PALETTES[Object.keys(PALETTES)[t % 3]];
     for (const swapRO of [false, true]) {
       const s = new ScanSession();

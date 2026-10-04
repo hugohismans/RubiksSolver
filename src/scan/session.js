@@ -132,6 +132,17 @@ export class ScanSession {
   // On essaie le schéma standard et sa version miroir (rouge/orange inversés),
   // ce qui corrige aussi une confusion rouge/orange sur les centres.
   resolve() {
+    // Rouge et orange se départagent par la teinte réelle des deux centres
+    // (le rouge est le moins « jaune ») : on corrige les étiquettes d'abord.
+    const scans = { ...this.scans };
+    if (scans.R && scans.O) {
+      const rank = (lab) => { const h = hueDeg(lab); return h > 300 ? h - 360 : h; };
+      if (rank(scans.R.labs[4]) > rank(scans.O.labs[4])) [scans.R, scans.O] = [scans.O, scans.R];
+    }
+    // Le schéma standard d'abord. Le schéma miroir (cube aux couleurs
+    // inversées, très rare) n'est retenu que s'il est nettement meilleur : sur
+    // un cube presque résolu, les deux sont « possibles » et le miroir serait
+    // une erreur.
     const candidates = [WESTERN, { ...WESTERN, R: 'O', L: 'R' }];
     const colors = STEPS.map((s) => s.color);
     let best = null;
@@ -143,8 +154,8 @@ export class ScanSession {
         const labs = new Array(54);
         for (const step of STEPS) {
           const slot = slotOf[step.color];
-          const topSlot = slotOf[this.scans[step.color].top];
-          const canon = rotateGrid(scanToCanonical(slot, topSlot, this.scans[step.color].labs), rots[step.color] || 0);
+          const topSlot = slotOf[scans[step.color].top];
+          const canon = rotateGrid(scanToCanonical(slot, topSlot, scans[step.color].labs), rots[step.color] || 0);
           const f = FACES.indexOf(slot);
           for (let k = 0; k < 9; k++) labs[f * 9 + k] = canon[k];
         }
@@ -154,7 +165,7 @@ export class ScanSession {
       // latérales, faciles à tenir droites) et le schéma de couleurs standard.
       const score = (res, rots) => res.cost + (res.valid.ok ? 0 : 1e6) + (res.corrected ? 30 : 0) +
         colors.reduce((t, c) => t + (rots[c] ? (c === 'W' || c === 'Y' ? 15 : 40) : 0), 0) +
-        (scheme === WESTERN ? 0 : 20);
+        (scheme === WESTERN ? 0 : 250);
       const quick = (rots) => score(assignColors(build(rots), { iterations: 1 }), rots);
       // Blanc et jaune : les 16 combinaisons ; pour chacune, on ajuste les
       // faces latérales une à une tant que ça s'améliore.

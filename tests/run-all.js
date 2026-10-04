@@ -44,6 +44,11 @@ const check = (name, ok, detail = '') => {
   check('session de scan', s.ok === s.n && s.okSwap === s.n, `${s.ok}/${s.n}, rouge/orange inversés ${s.okSwap}/${s.n}`);
   check('identification des centres', s.identOk >= s.identTot * 0.98, `${s.identOk}/${s.identTot}`);
   const t = runSession(60, true);
+  const ns = runSession(60, false, true);
+  check('cube presque résolu (pas de confusion miroir)', ns.ok === ns.n && ns.okSwap === ns.n, `${ns.ok}/${ns.n}, rouge/orange inversés ${ns.okSwap}/${ns.n}`);
+  // Faces en plus tournées au hasard : quelques cas sont réellement ambigus.
+  const nr = runSession(60, true, true);
+  check('presque résolu + faces tournées', nr.ok >= 54 && nr.okSwap >= 54, `${nr.ok}/${nr.n}, ${nr.okSwap}/${nr.n}`);
   check('faces montrées dans le mauvais sens', t.ok >= 58 && t.okSwap >= 58, `${t.ok}/${t.n}, ${t.okSwap}/${t.n}`);
 }
 
