@@ -3,115 +3,143 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#0e1014">
+  <meta name="theme-color" content="#0b0c16">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>Rubik's Solver</title>
-  <meta name="description" content="Scanne ton Rubik's Cube à la caméra et obtiens la solution en 3D.">
+  <meta name="description" content="Tourne ton Rubik's Cube devant la caméra : il est reconstruit en 3D et la solution s'anime sous tes yeux.">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
   <script type="importmap">{ "imports": { "three": "./vendor/three/three.module.js" } }</script>
   <script type="module" src="src/app.js"></script>
 </head>
 <body>
-  <main>
-    <!-- Accueil -->
-    <section id="home" class="screen active">
-      <div class="hero">
-        <div id="home-cube" class="hero-cube"></div>
-        <h1>Rubik's Solver</h1>
-        <p>Tourne ton cube devant la caméra, comme tu veux : je le reconstruis en 3D, je reconnais toutes les couleurs et je te donne une solution courte, animée.</p>
-      </div>
-      <div class="home-actions">
-        <button id="btn-scan" class="primary big">Scanner mon cube</button>
-        <button id="btn-manual" class="ghost">Saisir les couleurs à la main</button>
-        <p class="small" id="home-note"></p>
-      </div>
-    </section>
+  <div class="bg" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
 
-    <!-- Scan -->
-    <section id="scan" class="screen">
-      <div class="camera">
-        <video id="video" playsinline muted autoplay></video>
-        <canvas id="overlay"></canvas>
-      </div>
-      <header class="scan-top">
-        <button id="scan-back" class="icon" aria-label="Retour">&#8592;</button>
-        <div class="steps" id="steps"></div>
-        <button id="torch" class="icon" aria-label="Lampe" hidden>&#9728;</button>
-      </header>
-      <div class="instruction" id="instruction">
-        <div id="guide" class="guide"></div>
-        <div class="instr-text">
-          <div id="instr-main" class="instr-main"></div>
-          <div id="instr-sub" class="instr-sub"></div>
-        </div>
-      </div>
-      <div class="mini" id="mini">
-        <div id="mini-cube" class="mini-cube"></div>
-        <div class="mini-count" id="mini-count">0 / 54</div>
-      </div>
-      <div class="done-banner" id="done-banner">Cube reconnu ✓</div>
-      <div class="hint" id="hint"></div>
-      <div class="stability"><div id="stability-bar"></div></div>
-      <footer class="scan-bottom">
-        <button id="scan-undo" class="ghost small-btn guided-only" disabled>Annuler la dernière face</button>
-        <button id="scan-photo" class="ghost small-btn guided-only">Importer une photo</button>
-        <button id="scan-restart" class="ghost small-btn free-only">Recommencer</button>
-        <button id="scan-mode" class="ghost small-btn">Mode pas à pas</button>
-        <input id="photo-input" type="file" accept="image/*" hidden>
-      </footer>
-      <div id="flash" class="flash"></div>
-      <div id="scan-error" class="scan-error" hidden></div>
-    </section>
+  <!-- Caméra (sous la scène 3D) -->
+  <div id="camera-layer">
+    <video id="video" playsinline muted autoplay></video>
+    <canvas id="overlay"></canvas>
+    <div class="mini-backdrop" id="mini-backdrop"></div>
+  </div>
 
-    <!-- Vérification -->
-    <section id="review" class="screen">
-      <header class="bar">
-        <button id="review-back" class="icon" aria-label="Retour">&#8592;</button>
-        <h2>Vérifie les couleurs</h2>
-      </header>
-      <p class="small center">Touche une case pour changer sa couleur. Les cases qui clignotent sont incertaines.</p>
-      <div id="net" class="net"></div>
-      <div id="palette" class="palette"></div>
-      <div id="review-msg" class="msg"></div>
-      <div class="row">
-        <button id="review-rescan" class="ghost">Rescanner</button>
-        <button id="review-solve" class="primary">Résoudre</button>
-      </div>
-    </section>
+  <!-- Scène 3D unique : le cube voyage d'un écran à l'autre -->
+  <canvas id="stage"></canvas>
 
-    <!-- Solution -->
-    <section id="solve" class="screen">
-      <header class="bar">
-        <button id="solve-back" class="icon" aria-label="Retour">&#8592;</button>
+  <!-- Accueil -->
+  <section id="home" class="screen active">
+    <div class="pill">✨ Scan 3D · solution en ~20 coups</div>
+    <div id="home-cube" class="anchor hero-anchor"></div>
+    <div class="home-text">
+      <h1 class="title"><span class="rainbow">Rubik's</span> Solver</h1>
+      <p class="tagline">Tourne ton cube devant la caméra.<br>Je le reconstruis en 3D et je te montre comment le résoudre.</p>
+    </div>
+    <div class="home-actions">
+      <button id="btn-scan" class="cta">
+        <span class="cta-icon">📷</span> Scanner mon cube
+      </button>
+      <button id="btn-manual" class="ghost">Saisir les couleurs à la main</button>
+      <div class="how">
+        <div><b>1</b>Je scanne</div>
+        <div><b>2</b>Tu vérifies</div>
+        <div><b>3</b>On résout</div>
+      </div>
+      <p class="small" id="home-note"></p>
+    </div>
+  </section>
+
+  <!-- Scan -->
+  <section id="scan" class="screen">
+    <header class="scan-top">
+      <button id="scan-back" class="icon glass" aria-label="Retour">&#8592;</button>
+      <div class="steps guided-only" id="steps"></div>
+      <button id="torch" class="icon glass" aria-label="Lampe" hidden>🔦</button>
+    </header>
+    <div class="instruction guided-only" id="instruction">
+      <div id="guide" class="anchor guide"></div>
+      <div class="instr-text glass">
+        <div id="instr-main" class="instr-main"></div>
+        <div id="instr-sub" class="instr-sub"></div>
+      </div>
+    </div>
+    <div class="mini free-only" id="mini">
+      <div id="mini-cube" class="anchor mini-cube"></div>
+      <div class="mini-progress"><div id="mini-bar"></div></div>
+      <div class="mini-count" id="mini-count">0 / 54</div>
+    </div>
+    <div class="done-banner" id="done-banner"><span>Cube reconnu</span> ✓</div>
+    <div class="hint glass" id="hint"></div>
+    <div class="stability guided-only"><div id="stability-bar"></div></div>
+    <footer class="scan-bottom">
+      <button id="scan-undo" class="ghost small-btn glass guided-only" disabled>Annuler la dernière face</button>
+      <button id="scan-photo" class="ghost small-btn glass guided-only">Importer une photo</button>
+      <button id="scan-restart" class="ghost small-btn glass free-only">Recommencer</button>
+      <button id="scan-mode" class="ghost small-btn glass">Mode pas à pas</button>
+      <input id="photo-input" type="file" accept="image/*" hidden>
+    </footer>
+    <div id="flash" class="flash"></div>
+    <div id="scan-error" class="scan-error" hidden></div>
+  </section>
+
+  <!-- Vérification : le cube déplié en patron -->
+  <section id="review" class="screen">
+    <header class="bar">
+      <button id="review-back" class="icon glass" aria-label="Accueil">&#8592;</button>
+      <div>
+        <h2>Vérifie ton cube</h2>
+        <p class="small">Touche une case, puis une couleur pour la corriger.</p>
+      </div>
+    </header>
+    <div id="net-anchor" class="anchor net-anchor"></div>
+    <div id="palette" class="palette"></div>
+    <div id="review-msg" class="msg"></div>
+    <div class="row">
+      <button id="review-rescan" class="ghost">Rescanner</button>
+      <button id="review-solve" class="cta">Résoudre ✨</button>
+    </div>
+  </section>
+
+  <!-- Solution -->
+  <section id="solve" class="screen">
+    <header class="bar">
+      <button id="solve-back" class="icon glass" aria-label="Vérification">&#8592;</button>
+      <div>
         <h2 id="solve-title">Solution</h2>
-      </header>
-      <p id="hold" class="hold"></p>
-      <div id="viewer" class="viewer"></div>
-      <div class="current">
-        <span id="cur-move" class="move-big">–</span>
-        <span id="cur-desc" class="move-desc"></span>
+        <p id="hold" class="small"></p>
       </div>
-      <div id="moves" class="moves"></div>
-      <div class="controls">
-        <button id="ctl-start" class="icon" aria-label="Début">&#9198;</button>
-        <button id="ctl-prev" class="icon" aria-label="Précédent">&#9664;</button>
-        <button id="ctl-play" class="icon play" aria-label="Lecture">&#9654;</button>
-        <button id="ctl-next" class="icon" aria-label="Suivant">&#9654;&#10073;</button>
-        <button id="ctl-end" class="icon" aria-label="Fin">&#9197;</button>
-      </div>
+    </header>
+    <div id="viewer" class="anchor viewer"></div>
+    <div class="move-card glass">
+      <span id="cur-move" class="move-big">–</span>
+      <span id="cur-desc" class="move-desc"></span>
+    </div>
+    <div id="moves" class="moves"></div>
+    <div class="controls">
+      <button id="ctl-start" class="icon glass" aria-label="Début">&#9198;</button>
+      <button id="ctl-prev" class="icon glass" aria-label="Précédent">&#9664;</button>
+      <button id="ctl-play" class="icon play" aria-label="Lecture">&#9654;</button>
+      <button id="ctl-next" class="icon glass" aria-label="Suivant">&#9654;&#10073;</button>
+      <button id="ctl-end" class="icon glass" aria-label="Fin">&#9197;</button>
+    </div>
+    <div class="solve-foot">
       <label class="speed">Vitesse <input id="speed" type="range" min="0.4" max="3" step="0.1" value="1"></label>
       <details class="notation">
-        <summary>Comment lire la notation ?</summary>
-        <p>Chaque lettre désigne une face, vue en la regardant de face :
-          <b>U</b> haut, <b>D</b> bas, <b>F</b> avant, <b>B</b> arrière, <b>R</b> droite, <b>L</b> gauche.</p>
-        <p><b>R</b> = quart de tour dans le sens des aiguilles d'une montre, <b>R'</b> = sens inverse, <b>R2</b> = demi-tour.</p>
-        <p>Garde le cube dans la même orientation pendant toute la résolution.</p>
+        <summary>Notation ?</summary>
+        <p>Chaque lettre désigne une face, vue de face : <b>U</b> haut, <b>D</b> bas, <b>F</b> avant, <b>B</b> arrière, <b>R</b> droite, <b>L</b> gauche.
+          <b>R</b> = quart de tour horaire, <b>R'</b> = antihoraire, <b>R2</b> = demi-tour. Garde la même orientation tout du long.</p>
       </details>
-    </section>
-  </main>
+    </div>
+    <div id="celebrate" class="celebrate" hidden>
+      <div class="celebrate-text">Résolu ! 🎉</div>
+      <button id="again" class="cta">Résoudre un autre cube</button>
+    </div>
+  </section>
+
+  <canvas id="confetti"></canvas>
 </body>
 </html>

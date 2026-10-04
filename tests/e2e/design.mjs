@@ -1,0 +1,36 @@
+// Captures des écrans et des transitions (design).
+import { chromium } from 'playwright';
+import Cube from 'cubejs';
+const base = process.env.BASE || 'http://localhost:8080/';
+const browser = await chromium.launch({ args: ['--use-gl=swiftshader', '--enable-unsafe-swiftshader'] });
+const page = await browser.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2 });
+const errors = [];
+page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
+page.on('pageerror', (e) => errors.push(String(e)));
+await page.goto(base);
+await page.waitForTimeout(2500);
+await page.screenshot({ path: 'tests/out/d-home.png' });
+const state = Cube.random().asString();
+await page.evaluate((s) => window.__app.openReview({ facelets: s, uncertain: [3, 30], slotKey: { U: 'W', R: 'R', F: 'G', D: 'Y', L: 'O', B: 'B' } }), state);
+await page.waitForTimeout(900);
+await page.screenshot({ path: 'tests/out/d-unfold.png' });
+await page.waitForTimeout(1800);
+await page.screenshot({ path: 'tests/out/d-review.png' });
+// Toucher une case du patron : centre de la face F décalé d'une case
+const box = await page.locator('#net-anchor').boundingBox();
+await page.mouse.click(box.x + box.width * 0.45, box.y + box.height * 0.5);
+await page.waitForTimeout(400);
+await page.screenshot({ path: 'tests/out/d-select.png' });
+await page.click('#review-solve');
+await page.waitForTimeout(600);
+await page.screenshot({ path: 'tests/out/d-fold.png' });
+await page.waitForTimeout(3000);
+await page.screenshot({ path: 'tests/out/d-solve.png' });
+await page.click('#ctl-next');
+await page.waitForTimeout(150);
+await page.screenshot({ path: 'tests/out/d-move.png' });
+await page.click('#ctl-end');
+await page.waitForTimeout(700);
+await page.screenshot({ path: 'tests/out/d-celebrate.png' });
+console.log('erreurs:', errors.length ? errors : 'aucune');
+await browser.close();

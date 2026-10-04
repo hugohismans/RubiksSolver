@@ -7,12 +7,12 @@ import { scanToCanonical, rotateGrid, FACES } from '../cube/cube.js';
 import { assignColors } from '../cube/colors.js';
 
 export const COLOR_INFO = {
-  W: { name: 'blanche', short: 'Blanc', css: '#f4f4f0' },
-  Y: { name: 'jaune', short: 'Jaune', css: '#ffd500' },
-  R: { name: 'rouge', short: 'Rouge', css: '#d7263d' },
-  O: { name: 'orange', short: 'Orange', css: '#ff7a1a' },
-  B: { name: 'bleue', short: 'Bleu', css: '#1f6fe0' },
-  G: { name: 'verte', short: 'Vert', css: '#2fbf4a' },
+  W: { name: 'blanche', short: 'Blanc', css: '#f5f5f0' },
+  Y: { name: 'jaune', short: 'Jaune', css: '#ffd60a' },
+  R: { name: 'rouge', short: 'Rouge', css: '#ff3b5c' },
+  O: { name: 'orange', short: 'Orange', css: '#ff8a1f' },
+  B: { name: 'bleue', short: 'Bleu', css: '#2f7bff' },
+  G: { name: 'verte', short: 'Vert', css: '#2fd36b' },
 };
 export const COLOR_KEYS = ['W', 'Y', 'R', 'O', 'B', 'G'];
 

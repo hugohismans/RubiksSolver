@@ -16,7 +16,7 @@ await page.goto(base + '?state=' + state);
 await page.waitForTimeout(800);
 await page.screenshot({ path: 'tests/out/e2e-review.png' });
 await page.click('#review-solve');
-await page.waitForFunction(() => /Solution en/.test(document.getElementById('solve-title').textContent), null, { timeout: 30000 });
+await page.waitForFunction(() => /coups/.test(document.getElementById('solve-title').textContent), null, { timeout: 30000 });
 const title1 = await page.textContent('#solve-title');
 await page.waitForTimeout(6000);
 const title2 = await page.textContent('#solve-title');
