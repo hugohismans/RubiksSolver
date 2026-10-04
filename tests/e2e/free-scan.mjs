@@ -9,7 +9,7 @@ const base = process.env.BASE || 'http://localhost:8080/';
 const browser = await chromium.launch({
   args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', `--use-file-for-fake-video-capture=${path.resolve(video)}`, '--use-gl=swiftshader', '--enable-unsafe-swiftshader'],
 });
-const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, permissions: ['camera'] });
+const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, permissions: ['camera'], ignoreHTTPSErrors: true });
 const page = await ctx.newPage();
 const errors = [];
 page.on('pageerror', (e) => errors.push(String(e)));
