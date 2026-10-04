@@ -249,6 +249,42 @@ export function generate(seed, opts = {}) {
       lin[q] = acc[0] / (ss * ss); lin[q + 1] = acc[1] / (ss * ss); lin[q + 2] = acc[2] / (ss * ss);
     }
   }
+  // Réalisme vidéo (opts.realism) : dérive d'exposition d'une image à l'autre,
+  // pouce posé sur le cube, flou de bouger.
+  if (opts.realism) {
+    const pr = mulberry32((opts.poseSeed ?? 0) * 7919 + seed);
+    const drift = 1 + 0.18 * Math.sin((opts.poseSeed ?? 0) * 0.9);
+    for (let i = 0; i < lin.length; i++) lin[i] *= drift;
+    if (pr() < 0.5) {
+      // Pouce : ellipse couleur peau sur un coin de la face avant.
+      const corner = projectWith([pr() < 0.5 ? -1.5 : 1.5, pr() < 0.5 ? -1.5 : 1.5, -1.5]);
+      const rx = W * 0.07, ry = W * 0.13, ang = pr() * Math.PI;
+      const skin = linCol([220, 165, 135]);
+      for (let py = 0; py < H; py++) for (let px = 0; px < W; px++) {
+        const dx = px - corner[0], dy = py - corner[1];
+        const u = (dx * Math.cos(ang) + dy * Math.sin(ang)) / rx, v = (-dx * Math.sin(ang) + dy * Math.cos(ang)) / ry;
+        const e = u * u + v * v;
+        if (e < 1) for (let c = 0; c < 3; c++) lin[(py * W + px) * 3 + c] = skin[c] * (0.75 + 0.25 * (1 - e)) * exposure;
+      }
+    }
+    const L = Math.round(pr() * 5); // longueur du flou (px)
+    if (L > 0) {
+      const a = pr() * Math.PI, ux = Math.cos(a), uy = Math.sin(a);
+      const src = lin.slice();
+      for (let py = 0; py < H; py++) for (let px = 0; px < W; px++) {
+        const acc = [0, 0, 0];
+        let n = 0;
+        for (let t = -L; t <= L; t++) {
+          const x = Math.round(px + ux * t), y = Math.round(py + uy * t);
+          if (x < 0 || y < 0 || x >= W || y >= H) continue;
+          const q = (y * W + x) * 3;
+          acc[0] += src[q]; acc[1] += src[q + 1]; acc[2] += src[q + 2]; n++;
+        }
+        const q = (py * W + px) * 3;
+        lin[q] = acc[0] / n; lin[q + 1] = acc[1] / n; lin[q + 2] = acc[2] / n;
+      }
+    }
+  }
   const data = new Uint8ClampedArray(W * H * 4);
   // Bruit gaussien (Box-Muller)
   const gauss = () => Math.sqrt(-2 * Math.log(rnd() + 1e-12)) * Math.cos(2 * Math.PI * rnd());
