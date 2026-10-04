@@ -12,6 +12,7 @@ import { detectFaces } from '../src/vision/detector.js';
 import { generate, COLORS } from './lib/synth.js';
 import { rgbToLab, labDist } from '../src/vision/color.js';
 import { simulate } from './free-scan-sim.js';
+import { run as runHybrid } from './test-hybrid.js';
 import { detectMultiScale } from '../src/vision/multiscale.js';
 import { roughColor } from '../src/scan/model.js';
 import { fold, ROTATIONS } from '../src/scan/model.js';
@@ -89,6 +90,16 @@ const check = (name, ok, detail = '') => {
     const got = r.faces.map((f) => roughColor(f.cells[4].lab)).sort();
     check(`photo réelle ${i} (vue de coin)`, got.join() === centers.slice().sort().join(), `centres lus : ${got.join(' ') || 'aucun'}`);
   }
+}
+
+// 3c. Mode libre : faces dans un sens quelconque.
+{
+  const a = await runHybrid(10, false, 0);
+  check('mode libre : faces dans un sens quelconque', a.ok === a.n, `${a.ok}/${a.n}`);
+  const b = await runHybrid(10, true, 0);
+  check('mode libre : jamais de cube faux sans le signaler', b.wrongSure === 0, `${b.ok} exacts, ${b.amb} signalés ambigus`);
+  const c = await runHybrid(10, true, 2);
+  check('mode libre : une vue de coin lève l’ambiguïté', c.ok === c.n, `${c.ok}/${c.n}`);
 }
 
 // 4. Scan libre (modèle 3D)
