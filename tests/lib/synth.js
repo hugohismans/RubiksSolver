@@ -65,6 +65,7 @@ export function generate(seed, opts = {}) {
   const faces = FACES.map((_, k) => {
     const cells = [];
     for (let c = 0; c < 9; c++) cells.push(c === 4 || solvedFace ? centers[k] : pick(COLORS));
+    if (k === 0 && opts.frontColors) return opts.frontColors.slice();
     return cells;
   });
   // Variation de teinte par pièce (plastique) et par image.
@@ -99,6 +100,7 @@ export function generate(seed, opts = {}) {
   const radius = style === 'black' ? range(0.03, 0.15) : range(0.08, 0.22);
   const grooveDark = range(0.25, 0.85); // 0.85 = rainure quasi invisible
   const logo = opts.logo ?? rnd() < 0.7;
+  const noCube = !!opts.noCube;
   const capR = style === 'stickerless' ? range(0.25, 0.38) : 0;
 
   const light = (() => { const l = [range(-0.6, 0.6), range(-1, -0.2), -1]; const n = Math.hypot(...l); return l.map((x) => x / n); })();
@@ -111,7 +113,7 @@ export function generate(seed, opts = {}) {
   const floorPitch = range(0.6, 1.2);
   const floorDist = dist + range(2, 8);
   const tileBase = range(140, 210);
-  const hand = rnd() < 0.6;
+  const hand = opts.hand ?? rnd() < 0.6;
   const spec = rnd() < 0.5 ? { u: range(-1.4, 1.4), v: range(-1.4, 1.4), r: range(0.2, 0.6), k: range(0.2, 0.7) } : null;
   const clutter = Array.from({ length: 8 }, () => ({ x: rnd() * W, y: rnd() * H, w: range(20, 140), h: range(20, 140), c: [rnd() * 255, rnd() * 255, rnd() * 255] }));
 
@@ -198,7 +200,7 @@ export function generate(seed, opts = {}) {
           if (t2 < tmax) tmax = t2;
         }
         let col;
-        if (tmin < tmax && tmin > 0 && hitAxis >= 0) {
+        if (!noCube && tmin < tmax && tmin > 0 && hitAxis >= 0) {
           const p = [o[0] + dd[0] * tmin, o[1] + dd[1] * tmin, o[2] + dd[2] * tmin];
           const fi = FACES.findIndex((F) => F.axis === hitAxis && F.sign === hitSign);
           const F = FACES[fi];

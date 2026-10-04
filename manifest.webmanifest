@@ -1,0 +1,10 @@
+{
+  "name": "Rubik's Solver",
+  "short_name": "Rubik's",
+  "description": "Scanne ton Rubik's Cube à la caméra et obtiens la solution en 3D.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#0e1014",
+  "theme_color": "#0e1014",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

@@ -23,7 +23,8 @@ function f(t) {
 }
 
 export function rgbToLab(r, g, b) {
-  const R = SRGB_TO_LIN[r | 0], G = SRGB_TO_LIN[g | 0], B = SRGB_TO_LIN[b | 0];
+  const cl = (v) => Math.max(0, Math.min(255, v | 0));
+  const R = SRGB_TO_LIN[cl(r)], G = SRGB_TO_LIN[cl(g)], B = SRGB_TO_LIN[cl(b)];
   const X = (0.4124 * R + 0.3576 * G + 0.1805 * B) / 0.95047;
   const Y = 0.2126 * R + 0.7152 * G + 0.0722 * B;
   const Z = (0.0193 * R + 0.1192 * G + 0.9505 * B) / 1.08883;
