@@ -9,7 +9,7 @@ import { PALETTES } from './lib/synth.js';
 const SLOT = { W: 'U', R: 'R', G: 'F', Y: 'D', O: 'L', B: 'B' };
 const COLOR = Object.fromEntries(Object.entries(SLOT).map(([c, s]) => [s, c]));
 
-export function run(n = 200) {
+export function run(n = 200, rotateExtra = false) {
   let ok = 0, okSwap = 0, identOk = 0, identTot = 0;
   for (let t = 0; t < n; t++) {
     const state = Cube.random().asString();
@@ -20,7 +20,9 @@ export function run(n = 200) {
         const slot = SLOT[step.color], top = SLOT[step.top];
         const canon = [...state.slice(FACES.indexOf(slot) * 9, FACES.indexOf(slot) * 9 + 9)];
         const p = CANONICAL_NEIGHBORS[slot].indexOf(top);
-        const img = rotateGrid(canon, -p);
+        // Faces parfois montrées tournées : blanc/jaune souvent, faces latérales rarement.
+        const extra = rotateExtra && (step.group === 'cap' || Math.random() < 0.15) ? Math.floor(Math.random() * 4) : 0;
+        const img = rotateGrid(rotateGrid(canon, -p), extra);
         const k = 0.7 + 0.4 * Math.random();
         const labs = img.map((f) => rgbToLab(...pal[COLOR[f]].map((c) => Math.min(255, c * k + (Math.random() - 0.5) * 16))));
         // L'utilisateur montre l'orange quand on demande le rouge (et inversement).
@@ -43,6 +45,11 @@ export function run(n = 200) {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
+  let t = Date.now();
   const r = run(+(process.argv[2] || 200));
-  console.log(`exact: ${r.ok}/${r.n}, avec rouge/orange inversés: ${r.okSwap}/${r.n}, identification des centres: ${r.identOk}/${r.identTot}`);
+  console.log(`(${((Date.now() - t) / r.n / 2).toFixed(0)} ms/résolution) exact: ${r.ok}/${r.n}, avec rouge/orange inversés: ${r.okSwap}/${r.n}, identification des centres: ${r.identOk}/${r.identTot}`);
+}
+if (import.meta.url === `file://${process.argv[1]}`) {
+  const r = run(+(process.argv[2] || 200), true);
+  console.log(`faces tournées au hasard -> exact: ${r.ok}/${r.n}, avec rouge/orange inversés: ${r.okSwap}/${r.n}`);
 }

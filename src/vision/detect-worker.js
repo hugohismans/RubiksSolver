@@ -14,7 +14,7 @@ self.onmessage = (e) => {
   }
   const faces = res.faces.map((f) => ({
     cells: f.cells, corners: f.corners, center: f.center, area: f.area, roll: f.roll,
-    members: f.members, solid: f.solid, uniform: f.uniform, score: f.score, squareness: f.squareness,
+    members: f.members, residual: f.residual, solid: f.solid, uniform: f.uniform, score: f.score, squareness: f.squareness,
   }));
   const candidates = debug ? res.candidates.map((c) => c.quad) : null;
   // On renvoie le tampon pour le réutiliser (pas d'allocation à chaque image).

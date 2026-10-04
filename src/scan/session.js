@@ -3,7 +3,7 @@
 // 54 cases dans la convention du solveur.
 
 import { rgbToLab, labDist, chroma, hueDeg } from '../vision/color.js';
-import { scanToCanonical, FACES } from '../cube/cube.js';
+import { scanToCanonical, rotateGrid, FACES } from '../cube/cube.js';
 import { assignColors } from '../cube/colors.js';
 
 export const COLOR_INFO = {
@@ -36,7 +36,7 @@ export function roughColor(lab) {
   // Blanc : peu saturé (un blanc sous lumière chaude reste moins saturé qu'un jaune).
   if (c < 22 || (c < 32 && lab[0] > 78)) return lab[0] > 30 ? 'W' : null;
   if (h < 38 || h >= 330) return 'R';
-  if (h < 68) return 'O';
+  if (h < 75) return 'O';
   if (h < 105) return 'Y';
   if (h < 200) return 'G';
   return 'B';
@@ -52,6 +52,18 @@ export class ScanSession {
 
   nextStep() {
     return STEPS.find((s) => !this.scans[s.color]) || null;
+  }
+
+  // Couleur probable d'un centre (pour les faces voisines) : centre déjà
+  // scanné le plus proche, sinon estimation par la teinte.
+  colorOf(lab) {
+    let near = null;
+    for (const [col, sc] of Object.entries(this.scans)) {
+      const d = labDist(lab, sc.labs[4]);
+      if (!near || d < near.d) near = { col, d };
+    }
+    if (near && near.d < 14) return near.col;
+    return roughColor(lab);
   }
 
   // Identifie la face montrée à partir de son centre.
@@ -75,14 +87,38 @@ export class ScanSession {
       const other = rough === 'R' ? 'O' : 'R';
       if (!this.scans[other] && labDist(centerLab, this.scans[rough].labs[4]) > 10) color = other;
     }
+    let group = STEPS.find((s) => s.color === color).group;
+    if (this.scans[color] || group !== step.group) {
+      // Teinte ambiguë (orange/jaune, rouge/orange…) : si une couleur encore
+      // attendue dans cette étape est proche, c'est sans doute elle.
+      const alt = this.ambiguousAlternative(centerLab, step.group);
+      if (alt) return { color: alt, status: 'ok' };
+    }
     if (this.scans[color]) return { color, status: 'already' };
-    const group = STEPS.find((s) => s.color === color).group;
     if (group !== step.group) return { color, status: 'later' };
     return { color, status: 'ok' };
   }
 
-  accept(color, labs, rgbs) {
-    this.scans[color] = { labs, rgbs };
+  // top : couleur en haut de l'image (par défaut celle de la consigne).
+  ambiguousAlternative(lab, group) {
+    const HUE = { R: 25, O: 55, Y: 92, G: 140, B: 265 };
+    const c = chroma(lab), h = hueDeg(lab);
+    if (c < 25) return null;
+    let best = null;
+    for (const st of STEPS) {
+      if (st.group !== group || this.scans[st.color] || !(st.color in HUE)) continue;
+      let d = Math.abs(h - HUE[st.color]);
+      d = Math.min(d, 360 - d);
+      if (d <= 24 && (!best || d < best.d)) best = { color: st.color, d };
+    }
+    if (!best) return null;
+    // Pas un centre déjà scanné (sinon c'est bien une face déjà vue).
+    for (const sc of Object.values(this.scans)) if (labDist(lab, sc.labs[4]) < 12) return null;
+    return best.color;
+  }
+
+  accept(color, labs, rgbs, top = null) {
+    this.scans[color] = { labs, rgbs, top: top || STEPS.find((s) => s.color === color).top };
     this.history.push(color);
   }
 
@@ -97,23 +133,58 @@ export class ScanSession {
   // ce qui corrige aussi une confusion rouge/orange sur les centres.
   resolve() {
     const candidates = [WESTERN, { ...WESTERN, R: 'O', L: 'R' }];
+    const colors = STEPS.map((s) => s.color);
     let best = null;
     for (const scheme of candidates) {
       const slotOf = Object.fromEntries(Object.entries(scheme).map(([slot, col]) => [col, slot]));
-      const labs = new Array(54);
-      for (const step of STEPS) {
-        const slot = slotOf[step.color];
-        const topSlot = slotOf[step.top];
-        const canon = scanToCanonical(slot, topSlot, this.scans[step.color].labs);
-        const f = FACES.indexOf(slot);
-        for (let k = 0; k < 9; k++) labs[f * 9 + k] = canon[k];
+      // rots[c] : quarts de tour supplémentaires appliqués à la face c, au cas
+      // où elle aurait été montrée dans un autre sens que celui demandé.
+      const build = (rots) => {
+        const labs = new Array(54);
+        for (const step of STEPS) {
+          const slot = slotOf[step.color];
+          const topSlot = slotOf[this.scans[step.color].top];
+          const canon = rotateGrid(scanToCanonical(slot, topSlot, this.scans[step.color].labs), rots[step.color] || 0);
+          const f = FACES.indexOf(slot);
+          for (let k = 0; k < 9; k++) labs[f * 9 + k] = canon[k];
+        }
+        return labs;
+      };
+      // Petits a priori : on préfère la consigne (surtout pour les faces
+      // latérales, faciles à tenir droites) et le schéma de couleurs standard.
+      const score = (res, rots) => res.cost + (res.valid.ok ? 0 : 1e6) + (res.corrected ? 30 : 0) +
+        colors.reduce((t, c) => t + (rots[c] ? (c === 'W' || c === 'Y' ? 15 : 40) : 0), 0) +
+        (scheme === WESTERN ? 0 : 20);
+      const quick = (rots) => score(assignColors(build(rots), { iterations: 1 }), rots);
+      // Blanc et jaune : les 16 combinaisons ; pour chacune, on ajuste les
+      // faces latérales une à une tant que ça s'améliore.
+      let rots = {}, cur = Infinity;
+      for (let a = 0; a < 4; a++) for (let b = 0; b < 4; b++) {
+        let r = { W: a, Y: b }, sc = quick(r);
+        for (let pass = 0; pass < 3; pass++) {
+          let improved = false;
+          for (const c of colors) {
+            for (let k = 0; k < 4; k++) {
+              if ((r[c] || 0) === k) continue;
+              const r2 = { ...r, [c]: k };
+              const sc2 = quick(r2);
+              if (sc2 < sc - 1e-6) { sc = sc2; r = r2; improved = true; }
+            }
+          }
+          if (!improved) break;
+        }
+        if (sc < cur) { cur = sc; rots = r; }
       }
+      const labs = build(rots);
       const res = assignColors(labs);
-      const score = res.cost + (res.valid.ok ? 0 : 1e6) + (res.corrected ? 30 : 0);
-      if (!best || score < best.score) best = { ...res, scheme, score, labs };
+      const sc = score(res, rots);
+      if (!best || sc < best.score) {
+        best = { ...res, scheme, score: sc, labs, rotated: colors.filter((c) => rots[c]) };
+      }
     }
     return best;
   }
+
 }
 
 // Couleur (clé W/Y/R/O/B/G) de chaque face du solveur, pour l'affichage.

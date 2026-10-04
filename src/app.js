@@ -7,6 +7,7 @@ import { scanToCanonical, FACES, SOLVED, validateFacelets, parseMoves, applyMove
 import { labDist, labToRgb } from './vision/color.js';
 import { detectFaces } from './vision/detector.js';
 import { solve, warmUp } from './solver/solver.js';
+import { adjacentFaces, topFromNeighbor } from './scan/orientation.js';
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -119,7 +120,8 @@ function updateScanUI() {
     const slot = SLOT_OF[st.color];
     const f = FACES.indexOf(slot);
     const cells = stepCells(st.color);
-    const canon = cells ? scanToCanonical(slot, SLOT_OF[st.top], cells) : null;
+    const actualTop = cells ? scan.session.scans[st.color].top : st.top;
+    const canon = cells ? scanToCanonical(slot, SLOT_OF[actualTop], cells) : null;
     for (let k = 0; k < 9; k++) css[f * 9 + k] = canon ? canon[k] : k === 4 ? COLOR_INFO[st.color].css : '#3a3d46';
   }
   scan.guide.setStickerColors(css);
@@ -185,6 +187,9 @@ function onDetection(res) {
       if (same) t.frames.push(labs);
       else scan.track = { color: id.color, frames: [labs], t0: now };
       const tr = scan.track;
+      // Orientation : une face voisine visible indique la couleur du haut.
+      const top = voteTop(face, id.color, res.faces);
+      if (top) tr.topVotes = [...(tr.topVotes || []), top];
       progress = Math.min(1, tr.frames.length / STABLE_FRAMES, (now - tr.t0) / STABLE_MS);
       setHint(id.color === step.color ? 'Ne bouge plus…' : `Face ${COLOR_INFO[id.color].name} — ne bouge plus…`);
       if (tr.frames.length >= STABLE_FRAMES && now - tr.t0 >= STABLE_MS) capture(tr);
@@ -200,14 +205,39 @@ function medianLab(list) {
   });
 }
 
-function capture(track) {
-  const labs = Array.from({ length: 9 }, (_, k) => medianLab(track.frames.map((f) => f[k])));
-  acceptFace(track.color, labs);
+// Faces voisines fiables : pour une face latérale, le blanc ou le jaune
+// (au-dessus ou en dessous) ; pour blanc/jaune, le bleu ou le vert. Ces
+// positions ne dépendent pas du sens rouge/orange du cube.
+function voteTop(face, color, faces) {
+  const trusted = color === 'W' || color === 'Y' ? ['B', 'G'] : ['W', 'Y'];
+  const tops = [];
+  for (const { face: n, side } of adjacentFaces(face, faces)) {
+    const nc = scan.session.colorOf(n.cells[4].lab);
+    if (!trusted.includes(nc)) continue;
+    const t = topFromNeighbor(color, nc, side);
+    if (t) tops.push(t);
+  }
+  return tops.length && tops.every((t) => t === tops[0]) ? tops[0] : null;
 }
 
-function acceptFace(color, labs) {
+function capture(track) {
+  const labs = Array.from({ length: 9 }, (_, k) => medianLab(track.frames.map((f) => f[k])));
+  // Orientation détectée sur plusieurs images concordantes ?
+  let top = null;
+  const votes = track.topVotes || [];
+  if (votes.length >= Math.max(3, track.frames.length * 0.5)) {
+    const counts = {};
+    votes.forEach((v) => { counts[v] = (counts[v] || 0) + 1; });
+    const [best, n] = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+    if (n >= votes.length * 0.9) top = best;
+  }
+  acceptFace(track.color, labs, top);
+}
+
+function acceptFace(color, labs, top = null) {
   const rgbs = labs.map((l) => labToRgb(...l));
-  scan.session.accept(color, labs, rgbs);
+  const expectedTop = STEPS.find((s) => s.color === color).top;
+  scan.session.accept(color, labs, rgbs, top);
   scan.track = null;
   scan.cooldownUntil = performance.now() + 900;
   const fl = $('flash');
@@ -215,7 +245,9 @@ function acceptFace(color, labs) {
   requestAnimationFrame(() => requestAnimationFrame(() => fl.classList.remove('on')));
   if (navigator.vibrate) navigator.vibrate(60);
   beep();
-  setHint(`Face ${COLOR_INFO[color].name} enregistrée ✓`);
+  setHint(top && top !== expectedTop
+    ? `Face ${COLOR_INFO[color].name} enregistrée ✓ (${COLOR_INFO[top].short.toLowerCase()} en haut, détecté)`
+    : `Face ${COLOR_INFO[color].name} enregistrée ✓`);
   $('stability-bar').style.width = '0%';
   updateScanUI();
   if (scan.session.done) {
@@ -348,6 +380,7 @@ function openReview(result) {
   review.slotKey = result.manual ? { ...WESTERN_SLOTS } : slotColors(result);
   review.selected = -1;
   review.corrected = result.corrected;
+  review.rotated = result.rotated || [];
   show('review');
   renderReview();
 }
@@ -400,8 +433,11 @@ function renderReview() {
     const v = validateFacelets(s);
     ok = v.ok;
     msg.className = `msg ${v.ok ? 'ok' : 'err'}`;
+    const rot = review.rotated.length
+      ? ` J’ai remis dans le bon sens : face${review.rotated.length > 1 ? 's' : ''} ${review.rotated.map((c) => COLOR_INFO[c].name).join(', ')}.`
+      : '';
     msg.textContent = v.ok
-      ? (review.uncertain.size ? `Cube cohérent ✓ — vérifie quand même les ${review.uncertain.size} cases qui clignotent.` : 'Cube cohérent ✓')
+      ? (review.uncertain.size ? `Cube cohérent ✓ — vérifie quand même les ${review.uncertain.size} cases qui clignotent.` : 'Cube cohérent ✓') + rot
       : v.errors[0];
   }
   $('review-solve').disabled = !ok;

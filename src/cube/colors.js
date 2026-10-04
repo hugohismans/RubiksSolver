@@ -58,11 +58,11 @@ function parity(p) {
 
 // labs : tableau de 54 mesures Lab dans l'ordre Kociemba (centres compris).
 // Renvoie { facelets, uncertain: Set<index>, corrected: bool, cost }.
-export function assignColors(labs) {
+export function assignColors(labs, { iterations = 4 } = {}) {
   let refs = FACES.map((_, f) => labs[f * 9 + 4]);
   const faceIdx = Object.fromEntries(FACES.map((f, i) => [f, i]));
   let result = null;
-  for (let iter = 0; iter < 4; iter++) {
+  for (let iter = 0; iter < iterations; iter++) {
     const d = (k, face) => labDist(labs[k], refs[faceIdx[face]]);
     // Coins : coût[emplacement][pièce] = meilleure des 3 orientations.
     const cornerOpt = CORNERS.map((pos) => CORNER_COLORS.map((cols) => {

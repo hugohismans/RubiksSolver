@@ -9,6 +9,32 @@ export const PALETTES = {
   pastel: { W: [245, 245, 245], Y: [255, 238, 90], R: [225, 45, 45], O: [255, 150, 40], B: [40, 140, 240], G: [60, 200, 90] },
 };
 export const COLORS = ['W', 'Y', 'R', 'O', 'B', 'G'];
+import { FACELET_GEOMETRY } from '../../src/cube/cube.js';
+
+const KNORMAL = { U: [0, 1, 0], D: [0, -1, 0], R: [1, 0, 0], L: [-1, 0, 0], F: [0, 0, 1], B: [0, 0, -1] };
+const kcross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+
+// Couleurs de toutes les faces synthétiques pour un vrai cube (chaîne de 54
+// lettres), la face `front` vers la caméra et `top` en haut.
+function cubeFaces(cube) {
+  const front = KNORMAL[cube.front], up = KNORMAL[cube.top], right = kcross(up, front);
+  const toK = (v) => [0, 1, 2].map((i) => Math.round(right[i] * v[0] - up[i] * v[1] - front[i] * v[2]));
+  const index = new Map(FACELET_GEOMETRY.map((g, i) => [g.pos.join(',') + '|' + g.normal.join(','), i]));
+  return FACES.map((F) => {
+    const cells = [];
+    for (let j = 0; j < 3; j++) for (let i = 0; i < 3; i++) {
+      const p = [0, 0, 0];
+      for (let k = 0; k < 3; k++) p[k] = F.u[k] * (i - 1) + F.v[k] * (j - 1);
+      const n = [0, 0, 0]; n[F.axis] = F.sign;
+      // position du cubie = p + n (coordonnées -1..1), normale = n
+      const pos = toK(p.map((x, k) => x + n[k]));
+      const nk = toK(n);
+      const idx = index.get(pos.join(',') + '|' + nk.join(','));
+      cells.push(cube.colorOfSlot[cube.state[idx]]);
+    }
+    return cells;
+  });
+}
 
 function mulberry32(a) {
   return function () {
@@ -62,7 +88,7 @@ export function generate(seed, opts = {}) {
   // Couleurs : chaque face a un centre distinct, le reste est mélangé.
   const centers = COLORS.slice().sort(() => rnd() - 0.5);
   const solvedFace = opts.solved ?? rnd() < 0.15;
-  const faces = FACES.map((_, k) => {
+  const faces = opts.cube ? cubeFaces(opts.cube) : FACES.map((_, k) => {
     const cells = [];
     for (let c = 0; c < 9; c++) cells.push(c === 4 || solvedFace ? centers[k] : pick(COLORS));
     if (k === 0 && opts.frontColors) return opts.frontColors.slice();
@@ -80,15 +106,20 @@ export function generate(seed, opts = {}) {
     return [W / 2 + (f * c[0]) / c[2], H / 2 + (f * c[1]) / c[2]];
   };
   // Tire une pose jusqu'à ce que la face avant soit entièrement dans l'image.
+  // poseSeed : la pose varie, l'éclairage et le décor restent identiques.
+  const prnd = opts.poseSeed != null ? mulberry32(opts.poseSeed) : rnd;
+  const prange = (a, b) => a + (b - a) * prnd();
   for (let tries = 0; tries < 50; tries++) {
-    const ax = (range(-tilt, tilt) * Math.PI) / 180;
-    const ay = (range(-tilt, tilt) * Math.PI) / 180;
-    const az = (range(-22, 22) * Math.PI) / 180;
+    const pose = opts.pose || [0, 0, 0];
+    const rz = opts.pose ? 4 : 22;
+    const ax = ((pose[0] + prange(-tilt, tilt)) * Math.PI) / 180;
+    const ay = ((pose[1] + prange(-tilt, tilt)) * Math.PI) / 180;
+    const az = ((pose[2] + prange(-rz, rz)) * Math.PI) / 180;
     R = rotMat(ax, ay, az);
-    f = H * range(0.9, 1.4);
-    faceFrac = opts.faceFrac ?? range(0.25, 0.6); // largeur de face / largeur image
+    f = H * prange(0.9, 1.4);
+    faceFrac = opts.faceFrac ?? prange(0.25, 0.6); // largeur de face / largeur image
     dist = (3 * f) / (faceFrac * W);
-    t = [range(-0.15, 0.15) * W / f * dist, range(-0.15, 0.15) * H / f * dist, dist];
+    t = [prange(-0.15, 0.15) * W / f * dist, prange(-0.15, 0.15) * H / f * dist, dist];
     const m = 0.03 * W;
     const ok = [[-1.5, -1.5], [1.5, -1.5], [1.5, 1.5], [-1.5, 1.5]].every(([x, y]) => {
       const [px, py] = projectWith([x, y, -1.5]);

@@ -27,7 +27,7 @@ while (Date.now() - t0 < 90000) {
   const st = await page.evaluate(() => ({
     done: document.getElementById('review').classList.contains('active'),
     hint: document.getElementById('hint').textContent,
-    n: window.__app.scan.session ? window.__app.scan.session.history.length : 0,
+    n: window.__app.scan.session ? window.__app.scan.session.history.map((c) => c + ':' + window.__app.scan.session.scans[c].top).join(',') : 0,
   }));
   if (shot++ % 5 === 2) await page.screenshot({ path: `tests/out/e2e-scan-${shot}.png` });
   process.stdout.write(`[${((Date.now() - t0) / 1000).toFixed(0)}s ${st.n} faces] ${st.hint}\n`);

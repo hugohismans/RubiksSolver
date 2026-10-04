@@ -4,7 +4,6 @@
 import fs from 'node:fs';
 import { generate } from '../lib/synth.js';
 import { STEPS } from '../../src/scan/session.js';
-import { FACES, CANONICAL_NEIGHBORS, rotateGrid } from '../../src/cube/cube.js';
 
 const [state, out, style = 'stickerless', palette = 'neon'] = process.argv.slice(2);
 const SLOT = { W: 'U', R: 'R', G: 'F', Y: 'D', O: 'L', B: 'B' };
@@ -30,20 +29,24 @@ function toY4mFrame(img) {
 
 const fd = fs.openSync(out, 'w');
 fs.writeSync(fd, `YUV4MPEG2 W${W} H${H} F${FPS}:1 Ip A1:1 C420jpeg\n`);
-const common = { width: W, height: H, style, palette, tilt: 10, faceFrac: 0.5, background: 'tiles', hand: true, noise: 2 };
+const common = { width: W, height: H, style, palette, tilt: 4, faceFrac: 0.45, background: 'tiles', hand: true, noise: 2 };
+// TILT=1 : cube incliné (le dessus est visible). WRONG=1 : blanc et jaune
+// montrés avec le vert en haut au lieu du bleu (l'app doit le détecter).
+const tilt = process.env.TILT ? [24, 12, 0] : [0, 0, 0];
+const wrong = !!process.env.WRONG;
 let seed = 1000;
 // Transition : décor seul.
 const blank = toY4mFrame(generate(seed++, { ...common, noCube: true }).image);
 for (let k = 0; k < 8; k++) fs.writeSync(fd, blank);
 for (const step of STEPS) {
-  const slot = SLOT[step.color], top = SLOT[step.top];
-  const f = FACES.indexOf(slot);
-  const canon = [...state.slice(f * 9, f * 9 + 9)];
-  const img = rotateGrid(canon, -CANONICAL_NEIGHBORS[slot].indexOf(top)).map((s) => COLOR[s]);
+  const slot = SLOT[step.color];
+  const top = SLOT[wrong && step.group === 'cap' ? 'G' : step.top];
   for (let v = 0; v < 6; v++) {
-    const frame = toY4mFrame(generate(seed++, { ...common, frontColors: img, logo: true }).image);
+    const cube = { state, front: slot, top, colorOfSlot: COLOR };
+    const frame = toY4mFrame(generate(seed, { ...common, cube, pose: tilt, logo: true, poseSeed: v }).image);
     for (let r = 0; r < 4; r++) fs.writeSync(fd, frame);
   }
+  seed++;
   for (let k = 0; k < 10; k++) fs.writeSync(fd, blank);
   process.stdout.write(step.color + ' ');
 }
