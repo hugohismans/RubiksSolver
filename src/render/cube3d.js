@@ -79,8 +79,11 @@ export class Cube3D {
     this.running = true;
     const loop = () => {
       if (!this.running) return;
-      this.tick && this.tick();
-      this.renderer.render(this.scene, this.camera);
+      // Pas de rendu quand le cube n'est pas affiché (économie de batterie).
+      if (this.container.offsetParent !== null) {
+        this.tick && this.tick();
+        this.renderer.render(this.scene, this.camera);
+      }
       requestAnimationFrame(loop);
     };
     requestAnimationFrame(loop);

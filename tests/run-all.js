@@ -1,0 +1,75 @@
+// Suite de tests rapide : npm test
+//   - modèle du cube comparé à cubejs
+//   - attribution des couleurs, session de scan (orientation, rouge/orange)
+//   - détecteur : photo réelle + 120 images synthétiques (seuils minimaux)
+// Les tests E2E navigateur (fausse caméra) sont à part : voir README.
+import Cube from 'cubejs';
+import { applyMoves, SOLVED, validateFacelets, invertMoves } from '../src/cube/cube.js';
+import { run as runColors } from './test-colors.js';
+import { run as runSession } from './test-session.js';
+import { loadImage, resize } from './lib/image.js';
+import { detectFaces } from '../src/vision/detector.js';
+import { generate, COLORS } from './lib/synth.js';
+import { rgbToLab, labDist } from '../src/vision/color.js';
+
+let failed = 0;
+const check = (name, ok, detail = '') => {
+  console.log(`${ok ? '✓' : '✗'} ${name}${detail ? ' — ' + detail : ''}`);
+  if (!ok) failed++;
+};
+
+// 1. Mouvements
+{
+  let ok = 0;
+  for (let k = 0; k < 200; k++) {
+    const mv = Array.from({ length: 25 }, () => 'URFDLB'[(Math.random() * 6) | 0] + ['', "'", '2'][(Math.random() * 3) | 0]).join(' ');
+    const c = new Cube(); c.move(mv);
+    const mine = applyMoves(SOLVED, mv);
+    if (c.asString() === mine && validateFacelets(mine).ok && applyMoves(mine, invertMoves(mv)) === SOLVED) ok++;
+  }
+  check('mouvements identiques à cubejs', ok === 200, `${ok}/200`);
+  const bad = SOLVED.slice(0, 8) + 'R' + SOLVED.slice(9);
+  check('validation rejette un cube impossible', !validateFacelets(bad).ok);
+}
+
+// 2. Couleurs et session
+{
+  const r = runColors(300);
+  check('attribution des couleurs (cubes simulés)', r.exact >= 297, `${r.exact}/${r.n}`);
+  const s = runSession(60);
+  check('session de scan', s.ok === s.n && s.okSwap === s.n, `${s.ok}/${s.n}, rouge/orange inversés ${s.okSwap}/${s.n}`);
+  check('identification des centres', s.identOk >= s.identTot * 0.98, `${s.identOk}/${s.identTot}`);
+  const t = runSession(60, true);
+  check('faces montrées dans le mauvais sens', t.ok >= 58 && t.okSwap >= 58, `${t.ok}/${t.n}, ${t.okSwap}/${t.n}`);
+}
+
+// 3. Détecteur
+{
+  const img = resize(loadImage('tests/fixtures/gan-corner.jpg'), 480);
+  const res = detectFaces(img);
+  const white = res.faces.find((f) => f.cells.every((c) => c.lab[0] > 80 && Math.hypot(c.lab[1], c.lab[2]) < 20));
+  check('photo réelle : face blanche (avec logo) trouvée', !!white, `${res.faces.length} face(s)`);
+  let found = 0, cells = 0, ok = 0, fp = 0;
+  const N = 120;
+  for (let s = 5000; s < 5000 + N; s++) {
+    const { image, gt } = generate(s, { width: 300, height: 400 });
+    const r = detectFaces(image);
+    const mask = Buffer.from(gt.mask, 'base64');
+    fp += r.faces.filter((f) => !mask[Math.round(f.center[1]) * image.width + Math.round(f.center[0])]).length;
+    const cell = Math.hypot(gt.centers[0][0] - gt.centers[1][0], gt.centers[0][1] - gt.centers[1][1]);
+    const m = r.faces.find((f) => f.cells.every((c, k) => Math.hypot(c.x - gt.centers[k][0], c.y - gt.centers[k][1]) < 0.3 * cell));
+    if (!m) continue;
+    found++;
+    const refs = COLORS.map((c) => rgbToLab(...gt.palette[c]));
+    m.cells.forEach((c, k) => {
+      let best = 0, bd = 1e9;
+      refs.forEach((rf, i) => { const d = labDist(c.lab, rf); if (d < bd) { bd = d; best = i; } });
+      cells++;
+      if (COLORS[best] === gt.colors[k]) ok++;
+    });
+  }
+  check('détecteur : images synthétiques', found >= N * 0.85, `${found}/${N} faces trouvées, ${fp} faux positifs, ${((100 * ok) / cells).toFixed(1)}% cases bien lues`);
+}
+
+console.log(failed ? `\n${failed} test(s) en échec` : '\nTous les tests passent.');
+process.exit(failed ? 1 : 0);

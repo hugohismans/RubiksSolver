@@ -4,7 +4,7 @@ import { Cube3D } from './render/cube3d.js';
 import { Scanner } from './scan/scanner.js';
 import { ScanSession, STEPS, COLOR_INFO, slotColors } from './scan/session.js';
 import { scanToCanonical, FACES, SOLVED, validateFacelets, parseMoves, applyMoves } from './cube/cube.js';
-import { labDist, labToRgb } from './vision/color.js';
+import { labDist, labToRgb, chroma, hueDeg } from './vision/color.js';
 import { detectFaces } from './vision/detector.js';
 import { solve, warmUp } from './solver/solver.js';
 import { adjacentFaces, topFromNeighbor } from './scan/orientation.js';
@@ -187,15 +187,27 @@ function onDetection(res) {
       if (same) t.frames.push(labs);
       else scan.track = { color: id.color, frames: [labs], t0: now };
       const tr = scan.track;
+      // Doigt sur une case ? (teinte « peau » peu saturée, loin des centres connus)
+      const fingers = face.cells.some((c) => looksLikeSkin(c.lab));
+      if (fingers) tr.skin = (tr.skin || 0) + 1;
       // Orientation : une face voisine visible indique la couleur du haut.
       const top = voteTop(face, id.color, res.faces);
       if (top) tr.topVotes = [...(tr.topVotes || []), top];
-      progress = Math.min(1, tr.frames.length / STABLE_FRAMES, (now - tr.t0) / STABLE_MS);
-      setHint(id.color === step.color ? 'Ne bouge plus…' : `Face ${COLOR_INFO[id.color].name} — ne bouge plus…`);
-      if (tr.frames.length >= STABLE_FRAMES && now - tr.t0 >= STABLE_MS) capture(tr);
+      const needMs = STABLE_MS + (tr.skin ? 1500 : 0);
+      progress = Math.min(1, tr.frames.length / STABLE_FRAMES, (now - tr.t0) / needMs);
+      setHint(fingers ? 'Attention : un doigt cache peut-être une case'
+        : id.color === step.color ? 'Ne bouge plus…' : `Face ${COLOR_INFO[id.color].name} — ne bouge plus…`);
+      if (tr.frames.length >= STABLE_FRAMES && now - tr.t0 >= needMs) capture(tr);
     }
   }
   $('stability-bar').style.width = `${Math.round(progress * 100)}%`;
+}
+
+function looksLikeSkin(lab) {
+  const c = chroma(lab), h = hueDeg(lab);
+  if (!(c > 12 && c < 32 && h > 25 && h < 70 && lab[0] > 40 && lab[0] < 88)) return false;
+  // Une vraie couleur du cube déjà mesurée (orange pâle, blanc chaud…) ?
+  return !Object.values(scan.session.scans).some((sc) => labDist(lab, sc.labs[4]) < 18);
 }
 
 function medianLab(list) {
