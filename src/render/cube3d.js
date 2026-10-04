@@ -187,6 +187,37 @@ export class Cube3D {
     };
   }
 
+  // Oriente le cube par une matrice 3x3 (lignes) repère cube -> repère vue,
+  // puis applique une inclinaison fixe pour montrer trois faces.
+  setMatrix(rows, animate = true, tilt = [0.38, -0.5]) {
+    const m = new THREE.Matrix4().set(
+      rows[0][0], rows[0][1], rows[0][2], 0,
+      rows[1][0], rows[1][1], rows[1][2], 0,
+      rows[2][0], rows[2][1], rows[2][2], 0,
+      0, 0, 0, 1,
+    );
+    const base = new THREE.Quaternion().setFromRotationMatrix(m);
+    const target = new THREE.Quaternion().setFromEuler(new THREE.Euler(tilt[0], tilt[1], 0, 'XYZ')).multiply(base);
+    if (!animate) { this.root.quaternion.copy(target); this.tick = null; return; }
+    const from = this.root.quaternion.clone();
+    if (from.angleTo(target) < 1e-3) return;
+    const t0 = performance.now();
+    this.tick = () => {
+      const t = Math.min(1, (performance.now() - t0) / 450);
+      this.root.quaternion.slerpQuaternions(from, target, 1 - Math.pow(1 - t, 3));
+      if (t >= 1) this.tick = null;
+    };
+  }
+
+  // Rotation lente et continue (en attente).
+  spin(on) {
+    if (!on) { if (this.tick && this.tick.spin) this.tick = null; return; }
+    if (this.tick && this.tick.spin) return;
+    const f = () => this.root.rotateOnWorldAxis(new THREE.Vector3(0, 1, 0), 0.012);
+    f.spin = true;
+    this.tick = f;
+  }
+
   setDefaultView(animate = true) {
     this.setView('F', 'U', animate);
   }
