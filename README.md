@@ -114,5 +114,6 @@ Ajoute `?debug=1` à l'URL pour voir les candidats et le temps d'analyse.
 
 ## Déploiement
 
-Le workflow `.github/workflows/pages.yml` publie le site à chaque push sur
-`main`. À activer une fois : *Settings → Pages → Source : GitHub Actions*.
+GitHub Pages, « Deploy from a branch » : `main`, dossier `/ (root)`. Le site
+est statique (aucune compilation) ; `.nojekyll` désactive le traitement Jekyll.
+Adresse : https://hugohismans.github.io/RubiksSolver/
