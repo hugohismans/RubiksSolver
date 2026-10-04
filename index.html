@@ -22,7 +22,7 @@
       <div class="hero">
         <div id="home-cube" class="hero-cube"></div>
         <h1>Rubik's Solver</h1>
-        <p>Montre ton cube à la caméra, face par face. Je reconnais les couleurs, je vérifie que le cube est cohérent et je te donne une solution courte, animée en 3D.</p>
+        <p>Tourne ton cube devant la caméra, comme tu veux : je le reconstruis en 3D, je reconnais toutes les couleurs et je te donne une solution courte, animée.</p>
       </div>
       <div class="home-actions">
         <button id="btn-scan" class="primary big">Scanner mon cube</button>
@@ -49,11 +49,18 @@
           <div id="instr-sub" class="instr-sub"></div>
         </div>
       </div>
+      <div class="mini" id="mini">
+        <div id="mini-cube" class="mini-cube"></div>
+        <div class="mini-count" id="mini-count">0 / 54</div>
+      </div>
+      <div class="done-banner" id="done-banner">Cube reconnu ✓</div>
       <div class="hint" id="hint"></div>
       <div class="stability"><div id="stability-bar"></div></div>
       <footer class="scan-bottom">
-        <button id="scan-undo" class="ghost small-btn" disabled>Annuler la dernière face</button>
-        <button id="scan-photo" class="ghost small-btn">Importer une photo</button>
+        <button id="scan-undo" class="ghost small-btn guided-only" disabled>Annuler la dernière face</button>
+        <button id="scan-photo" class="ghost small-btn guided-only">Importer une photo</button>
+        <button id="scan-restart" class="ghost small-btn free-only">Recommencer</button>
+        <button id="scan-mode" class="ghost small-btn">Mode pas à pas</button>
         <input id="photo-input" type="file" accept="image/*" hidden>
       </footer>
       <div id="flash" class="flash"></div>

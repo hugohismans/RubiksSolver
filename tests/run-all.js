@@ -11,6 +11,8 @@ import { loadImage, resize } from './lib/image.js';
 import { detectFaces } from '../src/vision/detector.js';
 import { generate, COLORS } from './lib/synth.js';
 import { rgbToLab, labDist } from '../src/vision/color.js';
+import { simulate } from './free-scan-sim.js';
+import { fold, ROTATIONS } from '../src/scan/model.js';
 
 let failed = 0;
 const check = (name, ok, detail = '') => {
@@ -69,6 +71,18 @@ const check = (name, ok, detail = '') => {
     });
   }
   check('détecteur : images synthétiques', found >= N * 0.85, `${found}/${N} faces trouvées, ${fp} faux positifs, ${((100 * ok) / cells).toFixed(1)}% cases bien lues`);
+}
+
+// 4. Scan libre (modèle 3D)
+{
+  check('24 rotations du cube', ROTATIONS.length === 24);
+  // Repliage : la face du dessus d'une face avant (n = +z, lecture x/-y).
+  const top = fold({ n: [0, 0, 1], ex: [1, 0, 0], ey: [0, -1, 0] }, 0, 2);
+  check('repliage d’une face voisine', top && top.n.join() === '0,1,0' && top.ex.join() === '1,0,0' && top.ey.join() === '0,0,1');
+  let exact = 0;
+  const runs = [['stickerless', 'neon', 21], ['black', 'classic', 22]];
+  for (const [style, palette, seed] of runs) if (simulate({ style, palette, seed }).exact) exact++;
+  check('scan libre simulé (cube qui tourne)', exact === runs.length, `${exact}/${runs.length} cubes exacts`);
 }
 
 console.log(failed ? `\n${failed} test(s) en échec` : '\nTous les tests passent.');

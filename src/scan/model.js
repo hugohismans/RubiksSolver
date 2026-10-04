@@ -303,18 +303,23 @@ export class CubeModel {
     });
   }
 
-  // Face à montrer en priorité, et sa direction dans la vue actuelle.
+  // Face à montrer en priorité, et sa direction dans la vue actuelle : on
+  // privilégie ce qui manque le plus, mais aussi ce qui demande le moins de
+  // mouvement (une face déjà à moitié visible plutôt que l'arrière du cube).
   nextTarget() {
     const dirs = [[0, 1, 0], [0, -1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]];
+    const QT = this.lastQ ? transpose(this.lastQ) : null;
     let best = null;
     for (const d of dirs) {
       const f = this.faces.get(key(d));
-      const missing = f ? 9 - [...Array(9).keys()].filter((k) => this.cellKnown(f, k)).length : 10;
-      if (missing && (!best || missing > best.missing)) best = { n: d, missing };
+      const missing = f ? 9 - [...Array(9).keys()].filter((k) => this.cellKnown(f, k)).length : 9;
+      if (!missing) continue;
+      const local = QT ? apply(QT, d) : null;
+      // Tourner le cube sur lui-même (côtés) est plus naturel que le basculer.
+      const score = missing + (local ? 4 * local[2] + (Math.abs(local[0]) === 1 ? 1.5 : 0) : 0) + (f ? 0 : 2);
+      if (!best || score > best.score) best = { n: d, missing, local, score, face: f || null };
     }
-    if (!best) return null;
-    const local = this.lastQ ? apply(transpose(this.lastQ), best.n) : null;
-    return { ...best, local, face: this.faces.get(key(best.n)) || null };
+    return best;
   }
 
   // Chaîne de 54 mesures dans la convention du solveur : U = face blanche,

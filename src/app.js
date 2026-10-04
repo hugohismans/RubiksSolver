@@ -8,6 +8,7 @@ import { labDist, labToRgb, chroma, hueDeg } from './vision/color.js';
 import { detectFaces } from './vision/detector.js';
 import { solve, warmUp } from './solver/solver.js';
 import { adjacentFaces, topFromNeighbor } from './scan/orientation.js';
+import { CubeModel, transposeRot } from './scan/model.js';
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -52,19 +53,36 @@ const scan = {
   session: null, scanner: null, guide: null, track: null, cooldownUntil: 0, lastResult: null,
 };
 
-async function startScan() {
+async function startScan(mode = scan.mode || 'free') {
+  scan.mode = mode;
   show('scan');
+  const el = $('scan');
+  el.classList.toggle('free', mode === 'free');
+  el.classList.remove('complete');
+  $('scan-mode').textContent = mode === 'free' ? 'Mode pas à pas' : 'Mode libre';
   scan.session = new ScanSession();
   scan.track = null;
-  if (!scan.guide) scan.guide = new Cube3D($('guide'), { interactive: false, distance: 12 });
-  updateScanUI();
+  scan.model = new CubeModel();
+  scan.finishing = false;
+  scan.hint = { text: '', t: 0 };
+  if (mode === 'free') {
+    if (!scan.mini) scan.mini = new Cube3D($('mini-cube'), { interactive: false, distance: 11 });
+    scan.mini.setStickerColors(new Array(54).fill('#3a3d46'));
+    scan.mini.setDefaultView(false);
+    scan.mini.spin(true);
+    $('mini-count').textContent = '0 / 54';
+    setHint('Montre-moi ton cube en biais, pour que je voie 2 ou 3 faces');
+  } else {
+    if (!scan.guide) scan.guide = new Cube3D($('guide'), { interactive: false, distance: 12 });
+    updateScanUI();
+  }
   $('scan-error').hidden = true;
   const overlay = $('overlay');
   if (!scan.scanner) {
-    scan.scanner = new Scanner($('video'), overlay, { onResult: onDetection, debug: DEBUG });
+    scan.scanner = new Scanner($('video'), overlay, { onResult: (res) => (scan.mode === 'free' ? onFreeDetection(res) : onDetection(res)), debug: DEBUG });
   }
   try {
-    await scan.scanner.start();
+    if (!scan.scanner.running) await scan.scanner.start();
     $('torch').hidden = !scan.scanner.torchSupported;
   } catch (err) {
     const box = $('scan-error');
@@ -284,7 +302,7 @@ function beep() {
   } catch { /* pas de son, tant pis */ }
 }
 
-function drawOverlay(res, pick) {
+function drawOverlay(res, pick, classify = null) {
   const c = $('overlay');
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   const w = c.clientWidth, h = c.clientHeight;
@@ -300,10 +318,11 @@ function drawOverlay(res, pick) {
     for (const q of res.candidates) { ctx.beginPath(); q.map(map).forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y))); ctx.closePath(); ctx.stroke(); }
   }
   for (const f of res.faces) {
-    const isPick = pick && pick.face === f;
+    const cls = classify ? classify(f) : null;
+    const isPick = (pick && pick.face === f) || !!cls;
     const pts = f.corners.map(map);
     ctx.lineWidth = isPick ? 3 : 1.5;
-    const ok = isPick && pick.id.status === 'ok';
+    const ok = cls ? cls === 'ok' : isPick && pick.id.status === 'ok';
     ctx.strokeStyle = isPick ? (ok ? 'rgba(52,199,89,0.95)' : 'rgba(255,176,32,0.95)') : 'rgba(255,255,255,0.35)';
     ctx.beginPath();
     pts.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
@@ -340,6 +359,113 @@ function drawOverlay(res, pick) {
   }
 }
 
+
+// ---------------------------------------------------------------- Scan libre
+// On tourne le cube comme on veut ; le modèle 3D se remplit tout seul.
+
+const DIRECTION_HINTS = [
+  { v: [0, 1, 0], text: 'Montre-moi le dessus', icon: '⤴' },
+  { v: [0, -1, 0], text: 'Montre-moi le dessous', icon: '⤵' },
+  { v: [1, 0, 0], text: 'Tourne le cube vers la gauche pour me montrer le côté droit', icon: '↺' },
+  { v: [-1, 0, 0], text: 'Tourne le cube vers la droite pour me montrer le côté gauche', icon: '↻' },
+  { v: [0, 0, -1], text: 'Retourne le cube : montre-moi l’arrière', icon: '⟲' },
+  { v: [0, 0, 1], text: 'Tiens la face de devant bien en face', icon: '◎' },
+];
+
+// Évite que la consigne clignote : on la garde au moins un moment.
+function freeHint(text, priority = false) {
+  const now = performance.now();
+  if (text === scan.hint.text) return;
+  if (!priority && now - scan.hint.t < 1300) return;
+  scan.hint = { text, t: now };
+  setHint(text);
+}
+
+let lastMini = 0;
+function onFreeDetection(res) {
+  if (scan.finishing || !$('scan').classList.contains('active')) return;
+  const model = scan.model;
+  const r = model.update(res.faces);
+  drawFreeOverlay(res, r);
+  const now = performance.now();
+  if (now - lastMini > 120) {
+    lastMini = now;
+    scan.mini.setStickerColors(model.displayColors());
+    const p = model.progress();
+    $('mini-count').textContent = `${p.known} / 54`;
+  }
+  if (r.status === 'ok') {
+    scan.mini.spin(false);
+    scan.mini.setMatrix(transposeRot(r.Q));
+  }
+  // Consigne.
+  if (r.status === 'need2' || (r.status === 'none' && model.faces.size === 0)) {
+    freeHint('Montre-moi ton cube en biais, pour que je voie 2 ou 3 faces');
+  } else if (r.status === 'none') {
+    freeHint('Je ne vois plus le cube… remets-le devant la caméra');
+  } else if (r.status === 'reset') {
+    freeHint('Je reprends depuis le début', true);
+  } else if (r.status === 'lost' || r.status === 'ambiguous') {
+    freeHint('Tourne doucement… je me repère');
+  } else if (model.isComplete()) {
+    finishFree();
+    return;
+  } else {
+    const t = model.nextTarget();
+    if (t && t.local) {
+      const best = DIRECTION_HINTS.slice().sort((a, b) =>
+        (b.v[0] * t.local[0] + b.v[1] * t.local[1] + b.v[2] * t.local[2]) - (a.v[0] * t.local[0] + a.v[1] * t.local[1] + a.v[2] * t.local[2]))[0];
+      const name = t.face ? ` (face ${COLOR_INFO[t.face.color] ? COLOR_INFO[t.face.color].name : ''})` : '';
+      freeHint(`${best.icon} ${best.text}${t.missing < 9 && t.face ? name : ''}`);
+    }
+  }
+}
+
+function drawFreeOverlay(res, r) {
+  const ok = r.status === 'ok';
+  const mine = new Set((r.local || []).map((L) => L.det));
+  drawOverlay(res, null, (f) => (mine.has(f) ? (ok ? 'ok' : 'warn') : null));
+}
+
+// Couleur (W/Y/R/O/B/G) de chaque face du solveur d'après la teinte des centres.
+function slotKeysFromLabs(labs) {
+  const centers = FACES.map((f, i) => ({ f, lab: labs[i * 9 + 4] }));
+  const out = {};
+  const white = centers.slice().sort((a, b) => (chroma(a.lab) - a.lab[0] * 0.3) - (chroma(b.lab) - b.lab[0] * 0.3))[0];
+  out[white.f] = 'W';
+  const rest = centers.filter((c) => c !== white).map((c) => ({ ...c, h: (hueDeg(c.lab) + 360 - 340) % 360 }));
+  rest.sort((a, b) => a.h - b.h);
+  ['R', 'O', 'Y', 'G', 'B'].forEach((k, i) => { out[rest[i].f] = k; });
+  return out;
+}
+
+function finishFree() {
+  scan.finishing = true;
+  const res = scan.model.solve();
+  const slotKey = slotKeysFromLabs(res.labs);
+  const result = { facelets: res.facelets, uncertain: res.uncertain, corrected: res.corrected, slotKey };
+  stopScan();
+  if (navigator.vibrate) navigator.vibrate([60, 60, 120]);
+  beep();
+  if (!res.valid.ok || res.uncertain.size > 6) {
+    // Quelque chose cloche : on laisse l'utilisateur vérifier.
+    openReview(result);
+    return;
+  }
+  openReview(result, { silent: true });
+  // Le mini-cube prend ses vraies couleurs, grandit, la caméra s'efface.
+  const colors = Object.fromEntries(FACES.map((f) => [f, COLOR_INFO[slotKey[f]].css]));
+  scan.mini.setColors(colors);
+  scan.mini.setState(res.facelets);
+  scan.mini.setDefaultView(true);
+  $('scan').classList.add('complete');
+  $('done-banner').textContent = 'Cube reconnu ✓';
+  setTimeout(() => {
+    openSolve(res.facelets, slotKey);
+    $('scan').classList.remove('complete');
+  }, 1900);
+}
+
 // Import d'une photo (secours si pas de caméra, ou pour tester).
 async function importPhoto(file) {
   const bmp = await createImageBitmap(file);
@@ -360,6 +486,8 @@ async function importPhoto(file) {
 
 function initScan() {
   $('scan-back').onclick = () => { stopScan(); show('home'); };
+  $('scan-mode').onclick = () => startScan(scan.mode === 'free' ? 'guided' : 'free');
+  $('scan-restart').onclick = () => startScan('free');
   $('scan-undo').onclick = () => {
     const c = scan.session.undo();
     if (c) setHint(`Face ${COLOR_INFO[c].name} effacée`);
@@ -386,13 +514,14 @@ function manualResult() {
   return { facelets, uncertain: new Set(), scheme: WESTERN_SLOTS, manual: true };
 }
 
-function openReview(result) {
+function openReview(result, { silent = false } = {}) {
   review.facelets = result.facelets.split('');
   review.uncertain = new Set(result.uncertain || []);
-  review.slotKey = result.manual ? { ...WESTERN_SLOTS } : slotColors(result);
+  review.slotKey = result.slotKey || (result.manual ? { ...WESTERN_SLOTS } : slotColors(result));
   review.selected = -1;
   review.corrected = result.corrected;
   review.rotated = result.rotated || [];
+  if (silent) return;
   show('review');
   renderReview();
 }

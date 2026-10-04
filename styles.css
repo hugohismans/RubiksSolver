@@ -144,3 +144,27 @@ button.icon {
 @media (min-width: 700px) {
   .instruction { left: 50%; right: auto; transform: translateX(-50%); width: 520px; }
 }
+
+/* Scan libre */
+#scan.free .steps, #scan.free .instruction, #scan.free .stability, #scan.free .guided-only { display: none !important; }
+#scan:not(.free) .mini, #scan:not(.free) .free-only { display: none !important; }
+.mini {
+  position: absolute; z-index: 2; top: calc(10px + var(--safe-top)); right: 12px;
+  width: 132px; height: 158px; border-radius: 18px;
+  background: rgba(14, 16, 20, 0.62); backdrop-filter: blur(8px);
+  display: flex; flex-direction: column; align-items: center;
+  transition: all 0.9s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.mini-cube { width: 132px; height: 132px; transition: all 0.9s cubic-bezier(0.2, 0.8, 0.2, 1); }
+.mini-count { font-size: 0.8rem; color: var(--muted); font-variant-numeric: tabular-nums; margin-top: -6px; }
+#scan.free .hint { bottom: calc(80px + var(--safe-bottom)); font-size: 1.05rem; padding: 10px 18px; white-space: normal; text-align: center; max-width: 88vw; border-radius: 18px; }
+.camera { transition: opacity 0.8s; }
+.done-banner {
+  position: absolute; z-index: 3; left: 0; right: 0; top: calc(20% - 40px); text-align: center;
+  font-size: 1.6rem; font-weight: 750; opacity: 0; transform: translateY(10px); transition: all 0.6s 0.4s; pointer-events: none;
+}
+#scan.complete .camera, #scan.complete .hint, #scan.complete .scan-bottom, #scan.complete .scan-top { opacity: 0; transition: opacity 0.6s; }
+#scan.complete .mini { top: 22%; right: 50%; transform: translateX(50%); width: min(80vw, 420px); height: min(80vw, 420px); background: transparent; backdrop-filter: none; }
+#scan.complete .mini-cube { width: 100%; height: 100%; }
+#scan.complete .mini-count { opacity: 0; }
+#scan.complete .done-banner { opacity: 1; transform: none; }

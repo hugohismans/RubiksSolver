@@ -10,18 +10,38 @@ Safari). La caméra exige une page en **HTTPS** (GitHub Pages convient).
 ## Utilisation
 
 1. **Scanner mon cube** : autorise la caméra.
-2. Blanc en haut, montre les faces **rouge, bleue, orange, verte** (dans
-   n'importe quel ordre). Puis la face **blanche** et la face **jaune**, avec
-   le bleu en haut. Le petit cube 3D montre comment tenir le cube.
-3. Tiens la face immobile une demi-seconde : elle est capturée toute seule
-   (vibration + bip).
-4. Vérifie les couleurs : un toucher sur une case permet de la corriger. Les
-   cases douteuses clignotent.
-5. **Résoudre** : solution immédiate (≤ 22 coups), puis l'app cherche plus
-   court pendant quelques secondes. Lecture coup par coup en 3D.
+2. **Tourne ton cube devant la caméra, comme tu veux**, de préférence un peu
+   en biais pour que je voie 2 ou 3 faces à la fois. Le mini-cube en haut à
+   droite suit ton cube et se remplit au fur et à mesure. Une consigne
+   t'indique quoi montrer ensuite (« Montre-moi le dessous », « Tourne vers la
+   gauche… »).
+3. Dès que les 54 cases sont connues et forment un cube valide, le mini-cube
+   grandit, la caméra s'efface et la solution s'affiche.
+4. Solution immédiate (≤ 22 coups), puis l'app cherche plus court pendant
+   quelques secondes. Lecture coup par coup en 3D. Le bouton retour mène à la
+   vérification des couleurs (correction d'une case au toucher).
 
-Pas de caméra ? « Importer une photo » (une photo par face) ou « Saisir les
-couleurs à la main ».
+Il existe aussi un **mode pas à pas** (une face après l'autre, avec consignes
+d'orientation), l'import de photos, et la saisie manuelle des couleurs.
+
+## Le scan libre (reconstruction 3D)
+
+`src/scan/model.js` :
+
+- **Repliage** : deux faces détectées qui partagent une arête à l'image ont
+  une position relative entièrement déterminée sur le cube (les deux faces
+  parcourent l'arête commune en sens opposés). On reconstruit ainsi une vue
+  locale de 1 à 3 faces en 3D, sans calibrer la caméra.
+- **Recalage** : la vue locale est confrontée au modèle sous les 24 rotations
+  d'un cube. Les couleurs des centres et les stickers déjà vus désignent la
+  bonne ; en cas d'ambiguïté réelle, l'image est ignorée.
+- **Accumulation** : chaque case reçoit des mesures pondérées par l'angle de
+  vue (médiane pondérée). Une case est « connue » après plusieurs mesures
+  concordantes.
+- **Consignes** : on sait quelles faces manquent et où elles se trouvent par
+  rapport à la vue actuelle, d'où les indications de mouvement.
+- Aucune hypothèse sur le schéma de couleurs ou sur l'orientation : U = la
+  face blanche, F = la verte, et le reste découle de la géométrie observée.
 
 ## Comment marche la détection
 
@@ -80,6 +100,15 @@ Outils de test (`tests/`) :
 
   Variables : `TILT=1` (cube incliné), `WRONG=1` (blanc et jaune montrés à
   l'envers).
+
+- Scan libre : `node tests/free-scan-sim.js [style] [palette] [seed]` (simulation
+  sans navigateur, trajectoire de rotation), `sh tests/free-scan-batch.sh`
+  (16 cubes), et en E2E :
+
+  ```sh
+  node tests/e2e/make-free-video.js <état54> tests/out/free.y4m [style] [palette]
+  node tests/e2e/free-scan.mjs tests/out/free.y4m <état54>
+  ```
 
 Ajoute `?debug=1` à l'URL pour voir les candidats et le temps d'analyse.
 
