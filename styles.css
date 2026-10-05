@@ -183,3 +183,8 @@ button.icon { width: 44px; height: 44px; padding: 0; border-radius: 50%; display
 #scan:not(.free) .steps { padding-right: 0; }
 #scan.free .step { width: 26px; height: 26px; border-radius: 7px; }
 .step.done { border-color: var(--ok); }
+
+/* Lampe : mise en avant quand l'image est sombre. */
+#torch.suggest { animation: glow 1.2s ease-in-out infinite; }
+#torch.on { background: var(--yellow); color: #111; }
+@keyframes glow { 50% { box-shadow: 0 0 0 6px rgba(255, 214, 10, 0.45); } }

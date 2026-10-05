@@ -76,7 +76,7 @@ export async function resolveHybrid(loose, fixed = {}, { onProgress, relations =
   const res = assignColors(best.labs);
   // Ambiguë : une autre lecture valide, différente, presque aussi bonne.
   const ambiguous = !!(second && second.facelets !== best.facelets && second.score < best.score + 25);
-  return { ...res, labs: best.labs, scheme: best.scheme, rotated: [], ambiguous };
+  return { ...res, labs: best.labs, scheme: best.scheme, rotated: [], ambiguous, alternative: ambiguous ? second.facelets : null };
 }
 
 // Grilles canoniques des faces du solveur entièrement connues par le modèle 3D

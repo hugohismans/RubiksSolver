@@ -227,6 +227,7 @@ const STABLE_MS = 650;
 
 function onDetection(res) {
   scan.lastResult = res;
+  checkDarkness();
   const s = scan.session;
   const step = s.nextStep();
   drawOverlay(res, null);
@@ -501,8 +502,17 @@ function refreshMini(showColor = null) {
 }
 
 
+// Image sombre : on propose la lampe (si le téléphone en a une).
+function checkDarkness() {
+  const t = $('torch');
+  const dark = scan.scanner && scan.scanner.brightness < 70 && !t.hidden && !t.classList.contains('on');
+  t.classList.toggle('suggest', !!dark);
+  return dark;
+}
+
 function onFreeDetection(res) {
   if (scan.finishing || !$('scan').classList.contains('active')) return;
+  const dark = checkDarkness();
   scan.model.update(res.faces); // bonus 3D
   recordRelations(res.faces);
   // Faces entièrement connues par le modèle 3D : comptées comme capturées.
@@ -526,7 +536,9 @@ function onFreeDetection(res) {
   drawOverlay(res, null, (f) => (f === scan.lastPick ? 'ok' : null));
   // Il manque seulement l'orientation : on attend une vue de coin.
   if (scan.free.done) {
-    if (scan.relChanged && !scan.resolving) { scan.relChanged = false; finishFree(); }
+    // Nouvelle vue de coin, ou attente trop longue : on retente de conclure.
+    const timeout = scan.waitSince && now - scan.waitSince > 8000;
+    if ((scan.relChanged || timeout) && !scan.resolving) { scan.relChanged = false; finishFree(); }
     return;
   }
   // Capture : toutes les faces visibles sont suivies en parallèle.
@@ -541,7 +553,8 @@ function onFreeDetection(res) {
   } else if (u.seen.length) {
     freeHint(`Déjà vue ✓ — tourne le cube : il reste ${missingNames().join(', ')}`);
   } else {
-    freeHint(Object.keys(scan.free.scans).length ? `Montre-moi une autre face : ${missingNames().join(', ')}` : 'Montre-moi ton cube, de face ou par un coin');
+    freeHint(dark ? 'Il fait sombre : allume la lampe 🔦 (en haut à gauche)'
+      : Object.keys(scan.free.scans).length ? `Montre-moi une autre face : ${missingNames().join(', ')}` : 'Montre-moi ton cube, de face ou par un coin');
   }
   $('stability-bar').style.width = `${Math.round((u.tracking ? u.tracking.progress : 0) * 100)}%`;
 }
@@ -582,12 +595,12 @@ async function finishFree() {
   scan.resolving = false;
   if (!res || scan.finishing) return;
   const slotKey = slotKeysFromLabs(res.labs);
-  const result = { facelets: res.facelets, uncertain: res.uncertain, corrected: res.corrected, slotKey };
+  const result = { facelets: res.facelets, uncertain: res.uncertain, corrected: res.corrected, slotKey, alternative: res.alternative };
   // Plusieurs lectures possibles (cube presque résolu…) : une vue de coin
   // suffit à trancher.
   if (res.valid.ok && res.ambiguous) {
     scan.waitSince = scan.waitSince || performance.now();
-    if (performance.now() - scan.waitSince < 20000) {
+    if (performance.now() - scan.waitSince < 8000) {
       freeHint('↻ Presque fini ! Montre-moi un coin du cube, avec deux faces visibles', true);
       return;
     }
@@ -663,7 +676,12 @@ function initScan() {
     updateScanUI();
   };
   let torch = false;
-  $('torch').onclick = async () => { torch = !torch; await scan.scanner.setTorch(torch); };
+  $('torch').onclick = async () => {
+    torch = !torch;
+    await scan.scanner.setTorch(torch);
+    $('torch').classList.toggle('on', torch);
+    $('torch').classList.remove('suggest');
+  };
   $('scan-photo').onclick = () => $('photo-input').click();
   $('photo-input').onchange = async (e) => {
     const f = e.target.files[0];
@@ -690,6 +708,7 @@ async function openReview(result) {
   review.selected = -1;
   review.corrected = result.corrected;
   review.rotated = result.rotated || [];
+  review.alternative = result.alternative || null;
   showReview();
 }
 
@@ -759,11 +778,24 @@ function renderReview() {
       : v.errors[0];
   }
   $('review-solve').disabled = !ok;
+  $('review-alt').hidden = !review.alternative;
+  if (review.alternative && ok) {
+    msg.className = 'msg';
+    msg.textContent = 'Deux lectures sont possibles : si le patron ne correspond pas à ton cube, essaie « Autre possibilité ».';
+  }
 }
 
 function initReview() {
   $('review-back').onclick = () => goHome();
   $('review-rescan').onclick = () => startScan();
+  $('review-alt').onclick = () => {
+    // Bascule entre les deux lectures plausibles.
+    const cur = review.facelets.join('');
+    review.facelets = review.alternative.split('');
+    review.alternative = cur;
+    cube.setState(review.facelets.join(''));
+    renderReview();
+  };
   $('review-solve').onclick = () => openSolve(review.facelets.join(''), review.slotKey);
   // Toucher une case du patron 3D.
   const el = $('net-anchor');

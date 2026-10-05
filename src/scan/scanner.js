@@ -61,6 +61,10 @@ export class Scanner {
     if (this.work.width !== w || this.work.height !== h) { this.work.width = w; this.work.height = h; }
     this.workCtx.drawImage(v, 0, 0, w, h);
     const img = this.workCtx.getImageData(0, 0, w, h);
+    // Luminosité moyenne (échantillon) : pour proposer la lampe s'il fait sombre.
+    let sum = 0, n = 0;
+    for (let i = 0; i < img.data.length; i += 4 * 97) { sum += img.data[i] * 0.3 + img.data[i + 1] * 0.59 + img.data[i + 2] * 0.11; n++; }
+    this.brightness = sum / n;
     this.busy = true;
     // Les résultats sont exprimés dans l'image réduite (côté max BASE_SIDE).
     this.scale = Math.min(1, BASE_SIDE / Math.max(v.videoWidth, v.videoHeight));
