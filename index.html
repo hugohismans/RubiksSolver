@@ -33,13 +33,18 @@
 
   <!-- Accueil -->
   <section id="home" class="screen active">
-    <div class="pill">✨ Scan 3D · solution en ~20 coups</div>
+    <div class="pill" id="pill">✨ Scan 3D · solution en ~20 coups</div>
     <div id="home-cube" class="anchor hero-anchor"></div>
     <div class="home-text">
       <h1 class="title"><span class="rainbow">Rubik's</span> Solver</h1>
       <p class="tagline">Tourne ton cube devant la caméra.<br>Je le reconstruis en 3D et je te montre comment le résoudre.</p>
     </div>
     <div class="home-actions">
+      <div class="puzzles" id="puzzles" role="radiogroup" aria-label="Type de cube">
+        <button data-n="2" role="radio">2×2</button>
+        <button data-n="3" role="radio" class="on">3×3</button>
+        <button data-n="4" role="radio">4×4</button>
+      </div>
       <button id="btn-scan" class="cta">
         <span class="cta-icon">📷</span> Scanner mon cube
       </button>
@@ -132,7 +137,8 @@
       <details class="notation">
         <summary>Notation ?</summary>
         <p>Chaque lettre désigne une face, vue de face : <b>U</b> haut, <b>D</b> bas, <b>F</b> avant, <b>B</b> arrière, <b>R</b> droite, <b>L</b> gauche.
-          <b>R</b> = quart de tour horaire, <b>R'</b> = antihoraire, <b>R2</b> = demi-tour. Garde la même orientation tout du long.</p>
+          <b>R</b> = quart de tour horaire, <b>R'</b> = antihoraire, <b>R2</b> = demi-tour. Garde la même orientation tout du long.
+          Sur un 4×4, <b>Rw</b> fait tourner les 2 couches de droite ensemble.</p>
       </details>
     </div>
     <div id="celebrate" class="celebrate" hidden>

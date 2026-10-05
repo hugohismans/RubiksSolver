@@ -19,7 +19,10 @@ const DEFAULTS = {
   minSide: 7, // côté minimal d'un sticker (px, dans l'image analysée)
   maxSideFrac: 0.3, // côté maximal relatif à la plus petite dimension
   minMembers: 5,
+  n: 3, // taille de la grille (2 pour un 2x2, 4 pour un 4x4…)
 };
+// Nombre minimal de stickers reconnus pour valider une face N×N.
+const MIN_MEMBERS = { 2: 3, 3: 5, 4: 8, 5: 12 };
 
 function boxBlur(src, W, H) {
   const tmp = new Float32Array(W * H), out = new Float32Array(W * H);
@@ -326,7 +329,7 @@ function localStar(cands, adj, seed) {
 
 // Fait croître un réseau à partir d'une étoile locale : on prédit chaque nœud
 // voisin avec le modèle courant et on y rattache le candidat compatible.
-function growLattice(cands, star) {
+function growLattice(cands, star, n = 3) {
   if (star.length < 3) return null;
   const is0 = new Set(star.map((m) => m.i)), js0 = new Set(star.map((m) => m.j));
   if (is0.size < 2 || js0.size < 2) return null;
@@ -366,7 +369,7 @@ function growLattice(cands, star) {
     fit = nf;
     // Réseau plus grand qu'un cube : c'est un quadrillage (carrelage, clavier…).
     const span = (a) => Math.max(...a) - Math.min(...a) + 1;
-    if (span(fit.members.map((m) => m.i)) > 4 || span(fit.members.map((m) => m.j)) > 4) {
+    if (span(fit.members.map((m) => m.i)) > n + 1 || span(fit.members.map((m) => m.j)) > n + 1) {
       return { members: fit.members, grid: true };
     }
   }
@@ -375,9 +378,10 @@ function growLattice(cands, star) {
 
 // Vérifie que l'homographie est « saine » (pas de retournement, cellules
 // de taille comparable, pas de dégénérescence).
-function sane(H, W, Hh) {
+function sane(H, W, Hh, n = 3) {
   const pts = [];
-  for (const [i, j] of [[-0.5, -0.5], [2.5, -0.5], [2.5, 2.5], [-0.5, 2.5]]) {
+  const e = n - 0.5;
+  for (const [i, j] of [[-0.5, -0.5], [e, -0.5], [e, e], [-0.5, e]]) {
     const w = H[6] * i + H[7] * j + H[8];
     if (w <= 0) return false;
     pts.push(applyH(H, i, j));
@@ -430,16 +434,20 @@ function robustColor(samples) {
 }
 
 // Ordres de lecture possibles (8 symétries du carré) : (c, r) -> (i, j).
-const DIHEDRAL = [
-  (c, r) => [c, r], (c, r) => [2 - c, r], (c, r) => [c, 2 - r], (c, r) => [2 - c, 2 - r],
-  (c, r) => [r, c], (c, r) => [2 - r, c], (c, r) => [r, 2 - c], (c, r) => [2 - r, 2 - c],
-];
+const dihedral = (n) => {
+  const m = n - 1;
+  return [
+    (c, r) => [c, r], (c, r) => [m - c, r], (c, r) => [c, m - r], (c, r) => [m - c, m - r],
+    (c, r) => [r, c], (c, r) => [m - r, c], (c, r) => [r, m - c], (c, r) => [m - r, m - c],
+  ];
+};
 
-function orientFace(H) {
+function orientFace(H, n = 3) {
   let best = null;
-  for (const T of DIHEDRAL) {
+  const mid = (n - 1) / 2;
+  for (const T of dihedral(n)) {
     const P = (c, r) => applyH(H, ...T(c, r));
-    const a = P(0, 1), b = P(2, 1), c = P(1, 0), d = P(1, 2);
+    const a = P(0, mid), b = P(n - 1, mid), c = P(mid, 0), d = P(mid, n - 1);
     const col = [b[0] - a[0], b[1] - a[1]], row = [d[0] - c[0], d[1] - c[1]];
     const score = col[0] / Math.hypot(...col) + row[1] / Math.hypot(...row);
     if (!best || score > best.score) best = { T, score, col, row };
@@ -450,6 +458,7 @@ function orientFace(H) {
 
 export function detectFaces(image, options = {}) {
   const cfg = { ...DEFAULTS, ...options };
+  if (!options.minMembers) cfg.minMembers = MIN_MEMBERS[cfg.n] || Math.ceil(cfg.n * cfg.n * 0.55);
   const { width: W, height: Hh, data } = image;
   const raw = imageToLab(data, W * Hh);
   const lab = { L: boxBlur(raw.L, W, Hh), A: boxBlur(raw.A, W, Hh), B: boxBlur(raw.B, W, Hh) };
@@ -469,7 +478,7 @@ export function detectFaces(image, options = {}) {
   const faces = [];
   for (const seed of order) {
     if (done[seed] || adj[seed].length < 2) continue;
-    const res = growLattice(cands, localStar(cands, adj, seed));
+    const res = growLattice(cands, localStar(cands, adj, seed), cfg.n);
     if (!res) continue;
     const face = buildFace(res, cands, lab, W, Hh, cfg);
     if (face) faces.push(face);
@@ -479,37 +488,51 @@ export function detectFaces(image, options = {}) {
   // quadrilatère, validée par les creux sombres aux jonctions des pièces.
   for (const b of blobs) {
     if (faces.some((f) => pointInQuad(f.corners, b.cx, b.cy))) continue;
-    const face = solidFace(b, lab, G, W, Hh, cands);
+    const face = solidFace(b, lab, G, W, Hh, cands, cfg.n);
     if (face) faces.push(face);
   }
   // Faces voisines très inclinées : complétées à partir d'une face sûre.
-  faces.push(...completeNeighbors(faces, cands, lab, W, Hh));
+  faces.push(...completeNeighbors(faces, cands, lab, W, Hh, cfg.n));
   faces.sort((a, b) => b.score - a.score);
   return { faces, candidates: cands, width: W, height: Hh };
 }
 
 function buildFace(res, cands, lab, W, Hh, cfg) {
   if (res.grid) return null;
+  const n = cfg.n, m1 = n - 1;
   const members = res.members;
   let fit;
-  // Choix de la fenêtre 3x3.
+  // Choix de la fenêtre N×N.
   const is = members.map((m) => m.i), js = members.map((m) => m.j);
   const i0 = Math.min(...is), i1 = Math.max(...is), j0 = Math.min(...js), j1 = Math.max(...js);
-  if (i1 - i0 < 2 || j1 - j0 < 2) return null; // pas assez étendu pour fixer la fenêtre
+  if (i1 - i0 < m1 || j1 - j0 < m1) return null; // pas assez étendu pour fixer la fenêtre
   let best = null;
-  for (let a = i0; a <= i1 - 2; a++) {
-    for (let b = j0; b <= j1 - 2; b++) {
-      const inside = members.filter((m) => m.i >= a && m.i <= a + 2 && m.j >= b && m.j <= b + 2);
-      if (!best || inside.length > best.inside.length) best = { a, b, inside };
+  for (let a = i0; a <= i1 - m1; a++) {
+    for (let b = j0; b <= j1 - m1; b++) {
+      const inside = members.filter((m) => m.i >= a && m.i <= a + m1 && m.j >= b && m.j <= b + m1);
+      if (!best || inside.length > best.inside.length) best = { a, b, inside, ties: [] };
+      else if (inside.length === best.inside.length) best.ties.push({ a, b, inside });
     }
+  }
+  // 2x2 : plusieurs fenêtres complètes possibles (deux faces voisines
+  // alignées) — on garde celle dont les stickers sont le plus cohérents.
+  if (n === 2 && best.ties.length) {
+    const quality = (w) => {
+      const loc = w.inside.map((m) => ({ idx: m.idx, i: m.i - w.a, j: m.j - w.b }));
+      const f = fitLattice(loc, cands);
+      if (!f) return Infinity;
+      const dev = f.members.reduce((t, m) => t + axisDeviation(cands[m.idx], f.H, m.i, m.j), 0) / f.members.length;
+      return dev + 50 * f.residual + 20 * (loc.length - f.members.length);
+    };
+    best = [best, ...best.ties].map((w) => ({ w, q: quality(w) })).sort((x, y) => x.q - y.q)[0].w;
   }
   const outside = members.length - best.inside.length;
   // Quelques intrus alignés par hasard sont tolérés ; au-delà, c'est un quadrillage.
-  if (outside >= 4) return null;
+  if (outside >= Math.max(4, n)) return null;
   const inside = best.inside.map((m) => ({ idx: m.idx, i: m.i - best.a, j: m.j - best.b }));
   if (inside.length < cfg.minMembers) return null;
   const rows = new Set(inside.map((m) => m.j)), cols = new Set(inside.map((m) => m.i));
-  if (rows.size < 3 || cols.size < 3) return null;
+  if (rows.size < n || cols.size < n) return null;
   fit = fitLattice(inside, cands);
   if (!fit || fit.members.length < cfg.minMembers) return null;
   // Cohérence plane : sur une vue de coin, une rangée de la face voisine peut
@@ -522,12 +545,12 @@ function buildFace(res, cands, lab, W, Hh, cfg) {
     if (devs[worst] < 14) break;
     const rest = fit.members.filter((_, k) => k !== worst);
     const rows = new Set(rest.map((m) => m.j)), cols = new Set(rest.map((m) => m.i));
-    if (rest.length < cfg.minMembers || rows.size < 3 || cols.size < 3) return null;
+    if (rest.length < cfg.minMembers || rows.size < n || cols.size < n) return null;
     fit = fitLattice(rest, cands);
     if (!fit || fit.members.length < cfg.minMembers) return null;
   }
   return finishFace(fit.H, lab, W, Hh, {
-    allCands: cands,
+    allCands: cands, n,
     members: fit.members.length, residual: fit.residual, memberCands: fit.members.map((m) => cands[m.idx]),
   });
 }
@@ -535,11 +558,15 @@ function buildFace(res, cands, lab, W, Hh, cfg) {
 // À partir de l'homographie réseau -> image : échantillonne les 9 cases,
 // rejette les motifs répétitifs et calcule un score.
 function finishFace(H, lab, W, Hh, info) {
-  if (!sane(H, W, Hh)) return null;
+  const n = info.n || 3, nn = n * n, e = n - 0.5;
+  if (!sane(H, W, Hh, n)) return null;
   // La face doit être entièrement visible.
-  for (const [i, j] of [[-0.5, -0.5], [2.5, -0.5], [2.5, 2.5], [-0.5, 2.5]]) {
+  // Un motif 2x2 se retrouve facilement dans le décor (carrelage coupé par le
+  // bord de l'image) : on exige alors une face nettement à l'intérieur.
+  const margin = n <= 2 ? -0.03 : 0.03;
+  for (const [i, j] of [[-0.5, -0.5], [e, -0.5], [e, e], [-0.5, e]]) {
     const [x, y] = applyH(H, i, j);
-    if (x < -0.03 * W || x > 1.03 * W || y < -0.03 * Hh || y > 1.03 * Hh) return null;
+    if (x < -margin * W || x > (1 + margin) * W || y < -margin * Hh || y > (1 + margin) * Hh) return null;
   }
   const Hinv = invert3(H);
   // Un « jumeau » : une région de même forme et taille, alignée sur le réseau.
@@ -551,10 +578,10 @@ function finishFace(H, lab, W, Hh, info) {
     const sr = cellShapeRatio(c, H, oi, oj);
     return sr && sr[0] > 0.55 && sr[0] < 1.2 && sr[1] > 0.55 && sr[1] < 1.2;
   });
-  const orient = orientFace(H);
+  const orient = orientFace(H, n);
   const fit = { members: { length: info.members }, residual: info.residual };
 
-  // Échantillonnage des 9 cases.
+  // Échantillonnage des N×N cases.
   const cellColor = (i, j, ring) => {
     const samples = [];
     for (let sy = -3; sy <= 3; sy++) {
@@ -570,58 +597,61 @@ function finishFace(H, lab, W, Hh, info) {
     return samples.length >= 10 ? robustColor(samples) : null;
   };
   const grid = [];
-  for (let j = 0; j < 3; j++) for (let i = 0; i < 3; i++) grid.push(cellColor(i, j, i === 1 && j === 1));
+  // Centre d'une face impaire : logo ou capuchon possibles, on lit l'anneau.
+  const mid = n % 2 ? (n - 1) / 2 : -1;
+  for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) grid.push(cellColor(i, j, i === mid && j === mid));
   if (grid.some((g) => !g)) return null;
   // Motif répétitif (carrelage, tissu…) : les cases extérieures voisines
   // ressemblent aux cases du bord. Sur un vrai cube, elles appartiennent à une
   // autre face ou au décor.
   let ringTot = 0, ringSame = 0, ringTwins = 0;
-  for (let k = 0; k < 3; k++) {
-    for (const [oi, oj, ii, jj] of [[k, -1, k, 0], [k, 3, k, 2], [-1, k, 0, k], [3, k, 2, k]]) {
+  for (let k = 0; k < n; k++) {
+    for (const [oi, oj, ii, jj] of [[k, -1, k, 0], [k, n, k, n - 1], [-1, k, 0, k], [n, k, n - 1, k]]) {
       const out = cellColor(oi, oj, false);
       if (!out || out.conf < 0.6) continue;
       ringTot++;
-      if (labDist(out.lab, grid[jj * 3 + ii].lab) < 10) {
+      if (labDist(out.lab, grid[jj * n + ii].lab) < 10) {
         ringSame++;
         if (hasTwin(oi, oj)) ringTwins++;
       }
     }
   }
-  if (!info.neighbor && (ringTwins >= 3 || (ringTwins >= 1 && ringTot >= 6 && ringSame >= Math.max(6, ringTot * 0.6)))) return null;
+  const rs = (k) => Math.round((k * n) / 3); // seuils pensés pour un 3x3
+  if (!info.neighbor && (ringTwins >= Math.max(3, rs(3)) || (ringTwins >= 1 && ringTot >= rs(6) && ringSame >= Math.max(rs(6), ringTot * 0.6)))) return null;
   // Face unie : il faut en plus que l'extérieur soit différent (sinon c'est
   // probablement un morceau de sol ou de mur).
   if (info.solid && ringTot >= 4 && ringSame >= ringTot * 0.5) return null;
   let spread = 0;
-  for (let a = 0; a < 9; a++) for (let b = a + 1; b < 9; b++) spread = Math.max(spread, labDist(grid[a].lab, grid[b].lab));
-  if (!info.neighbor && spread < 12 && ringTot >= 6 && ringSame >= Math.max(6, ringTot * 0.6)) return null;
+  for (let a = 0; a < nn; a++) for (let b = a + 1; b < nn; b++) spread = Math.max(spread, labDist(grid[a].lab, grid[b].lab));
+  if (!info.neighbor && spread < 12 && ringTot >= rs(6) && ringSame >= Math.max(rs(6), ringTot * 0.6)) return null;
   const cells = [];
-  for (let r = 0; r < 3; r++) {
-    for (let c = 0; c < 3; c++) {
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < n; c++) {
       const [i, j] = orient.T(c, r);
-      const col = grid[j * 3 + i];
+      const col = grid[j * n + i];
       const center = applyH(H, i, j);
       cells.push({ lab: col.lab, rgb: labToRgb(...col.lab), conf: col.conf, x: center[0], y: center[1] });
     }
   }
   // Coins en ordre de lecture : haut-gauche, haut-droite, bas-droite, bas-gauche.
-  const corners = [[-0.5, -0.5], [2.5, -0.5], [2.5, 2.5], [-0.5, 2.5]].map(([c, r]) => applyH(H, ...orient.T(c, r)));
+  const corners = [[-0.5, -0.5], [e, -0.5], [e, e], [-0.5, e]].map(([c, r]) => applyH(H, ...orient.T(c, r)));
   const area = polygonArea(corners);
   const cx = corners.reduce((s, p) => s + p[0], 0) / 4, cy = corners.reduce((s, p) => s + p[1], 0) / 4;
   const centrality = 1 - Math.hypot((cx - W / 2) / W, (cy - Hh / 2) / Hh);
-  const meanConf = cells.reduce((s, c) => s + c.conf, 0) / 9;
+  const meanConf = cells.reduce((s, c) => s + c.conf, 0) / nn;
   // Une face vue de face est un carré : on préfère la face la moins inclinée.
   const sides = corners.map((p, k) => Math.hypot(p[0] - corners[(k + 1) % 4][0], p[1] - corners[(k + 1) % 4][1]));
   const squareness = Math.min(...sides) / Math.max(...sides);
   // Face uniforme et grise : suspecte (carrelage, mur…), on la pénalise.
   let maxPair = 0;
-  for (let a = 0; a < 9; a++) for (let b = a + 1; b < 9; b++) maxPair = Math.max(maxPair, labDist(cells[a].lab, cells[b].lab));
+  for (let a = 0; a < nn; a++) for (let b = a + 1; b < nn; b++) maxPair = Math.max(maxPair, labDist(cells[a].lab, cells[b].lab));
   const uniform = maxPair < 12;
-  const gray = uniform && Math.hypot(cells[4].lab[1], cells[4].lab[2]) < 12;
-  const score = 3 * (fit.members.length / 9) + 2 * meanConf + 2 * centrality + 6 * Math.sqrt(area / (W * Hh)) +
+  const gray = uniform && Math.hypot(cells[nn >> 1].lab[1], cells[nn >> 1].lab[2]) < 12;
+  const score = 3 * (fit.members.length / nn) + 2 * meanConf + 2 * centrality + 6 * Math.sqrt(area / (W * Hh)) +
     4 * squareness - 5 * fit.residual - (gray ? 4 : 0);
   return {
     H, cells, corners, area, roll: orient.roll, center: [cx, cy], squareness, uniform,
-    members: info.members, residual: info.residual, score, memberCands: info.memberCands, solid: !!info.solid, predicted: !!info.neighbor,
+    members: info.members, residual: info.residual, score, memberCands: info.memberCands, solid: !!info.solid, predicted: !!info.neighbor, n,
   };
 }
 
@@ -643,10 +673,11 @@ function pointInQuad(q, x, y) {
 // Hypothèse « face entière unie » : la région est la face, subdivisée en 3x3.
 // Validation : aux 4 jonctions intérieures, les coins arrondis des pièces
 // laissent un petit creux sombre (ou une ligne d'ombre) que l'on mesure.
-function solidFace(b, lab, G, W, Hh, cands) {
+function solidFace(b, lab, G, W, Hh, cands, n = 3) {
   // Les coins du quadrilatère sont un peu à l'intérieur de la face réelle
   // (bande de gradient exclue) : on les associe à ±0.45 plutôt que ±0.5.
-  const src = [[-0.45, -0.45], [2.45, -0.45], [2.45, 2.45], [-0.45, 2.45]];
+  const e = n - 0.55;
+  const src = [[-0.45, -0.45], [e, -0.45], [e, e], [-0.45, e]];
   // Ordre des coins : b.quad suit l'enveloppe (sens constant).
   const H = fitHomography(src, b.quad);
   if (!H) return null;
@@ -657,17 +688,19 @@ function solidFace(b, lab, G, W, Hh, cands) {
     return lab.L[yi * W + xi];
   };
   const cellL = [];
-  for (let j = 0; j < 3; j++) for (let i = 0; i < 3; i++) {
+  for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
     for (const [dx, dy] of [[-0.2, -0.2], [0.2, -0.2], [-0.2, 0.2], [0.2, 0.2], [0, 0]]) {
       const v = Lat(i + dx, j + dy);
       if (v !== null) cellL.push(v);
     }
   }
-  if (cellL.length < 30) return null;
+  if (cellL.length < Math.round((n * n * 10) / 3)) return null;
   const ref = median(cellL);
   // Jonctions : minimum de L dans un petit voisinage (le trou est petit).
   let dark = 0;
-  for (const [i, j] of [[0.5, 0.5], [1.5, 0.5], [0.5, 1.5], [1.5, 1.5]]) {
+  const junctions = [];
+  for (let j = 0; j < n - 1; j++) for (let i = 0; i < n - 1; i++) junctions.push([i + 0.5, j + 0.5]);
+  for (const [i, j] of junctions) {
     let mn = Infinity;
     for (let dy = -0.08; dy <= 0.081; dy += 0.04) for (let dx = -0.08; dx <= 0.081; dx += 0.04) {
       const v = Lat(i + dx, j + dy);
@@ -677,8 +710,9 @@ function solidFace(b, lab, G, W, Hh, cands) {
   }
   // Rainures : milieu des lignes intérieures, plus sombres que les cases.
   let grooves = 0;
-  for (const [i, j, horiz] of [[0, 0.5, 1], [1, 0.5, 1], [2, 0.5, 1], [0, 1.5, 1], [1, 1.5, 1], [2, 1.5, 1],
-    [0.5, 0, 0], [0.5, 1, 0], [0.5, 2, 0], [1.5, 0, 0], [1.5, 1, 0], [1.5, 2, 0]]) {
+  const lines = [];
+  for (let a = 0; a < n; a++) for (let g = 0; g < n - 1; g++) lines.push([a, g + 0.5, 1], [g + 0.5, a, 0]);
+  for (const [i, j, horiz] of lines) {
     let mn = Infinity;
     for (let d = -0.06; d <= 0.061; d += 0.03) {
       const v = horiz ? Lat(i, j + d) : Lat(i + d, j);
@@ -686,31 +720,34 @@ function solidFace(b, lab, G, W, Hh, cands) {
     }
     if (ref - mn > 4) grooves++;
   }
-  if (dark < 3 && grooves < 8) return null;
-  if (dark < 2) return null;
+  // Seuils pensés pour un 3x3 (4 jonctions, 12 rainures), mis à l'échelle.
+  const J = junctions.length, Lr = lines.length;
+  if (dark < Math.ceil(J * 0.75) && grooves < Math.round((Lr * 2) / 3)) return null;
+  if (dark < Math.ceil(J * 0.5)) return null;
   // Une main (peau) peut ressembler à une face unie : on l'écarte.
-  const centerLab = [lab.L, lab.A, lab.B].map((P) => { const [x, y] = applyH(H, 1, 1); return P[Math.round(y) * W + Math.round(x)]; });
+  const centerLab = [lab.L, lab.A, lab.B].map((P) => { const [x, y] = applyH(H, (n - 1) / 2, (n - 1) / 2); return P[Math.round(y) * W + Math.round(x)]; });
   const ch = Math.hypot(centerLab[1], centerLab[2]), hue = (Math.atan2(centerLab[2], centerLab[1]) * 180) / Math.PI;
   if (ch > 10 && ch < 36 && hue > 15 && hue < 80) return null;
-  return finishFace(H, lab, W, Hh, { members: 0, residual: 0.05, memberCands: [b], solid: true, allCands: cands });
+  return finishFace(H, lab, W, Hh, { members: 0, residual: 0.05, memberCands: [b], solid: true, allCands: cands, n });
 }
 
 // Complète une face voisine très inclinée (souvent mal segmentée sur un cube
 // sans stickers) : l'arête commune avec une face sûre fixe deux coins de sa
 // grille ; deux stickers isolés suffisent alors à déterminer le reste.
-function completeNeighbors(faces, cands, lab, W, Hh) {
+function completeNeighbors(faces, cands, lab, W, Hh, n = 3) {
+  const nn = n * n, e = n - 0.5;
   const used = new Set(faces.flatMap((f) => f.memberCands || []));
   const out = [];
   for (const A of faces) {
-    if (A.solid || A.members < 6) continue;
-    const cellA = Math.abs(A.area) / 9;
+    if (A.solid || A.members < Math.round((nn * 2) / 3)) continue;
+    const cellA = Math.abs(A.area) / nn;
     for (let p = 0; p < 4; p++) {
       const E0 = A.corners[p], E1 = A.corners[(p + 1) % 4];
       const ex = E1[0] - E0[0], ey = E1[1] - E0[1], len = Math.hypot(ex, ey);
       const mid = [(E0[0] + E1[0]) / 2, (E0[1] + E1[1]) / 2];
-      let n = [ey / len, -ex / len];
-      if ((A.center[0] - mid[0]) * n[0] + (A.center[1] - mid[1]) * n[1] > 0) n = [-n[0], -n[1]];
-      const beyond = (q) => (q[0] - mid[0]) * n[0] + (q[1] - mid[1]) * n[1];
+      let nrm = [ey / len, -ex / len];
+      if ((A.center[0] - mid[0]) * nrm[0] + (A.center[1] - mid[1]) * nrm[1] > 0) nrm = [-nrm[0], -nrm[1]];
+      const beyond = (q) => (q[0] - mid[0]) * nrm[0] + (q[1] - mid[1]) * nrm[1];
       const along = (q) => ((q[0] - mid[0]) * ex + (q[1] - mid[1]) * ey) / len;
       // Déjà une face de ce côté ?
       if ([...faces, ...out].some((f) => f !== A && beyond(f.center) > 0 && Math.hypot(f.center[0] - mid[0], f.center[1] - mid[1]) < len * 1.2)) continue;
@@ -721,9 +758,9 @@ function completeNeighbors(faces, cands, lab, W, Hh) {
       });
       if (pool.length < 2) continue;
       // Grille de la voisine : son bord bas est l'arête commune (BG = E0, BD = E1).
-      const anchorsSrc = [[-0.5, 2.5], [2.5, 2.5]], anchorsDst = [E0, E1];
+      const anchorsSrc = [[-0.5, e], [e, e]], anchorsDst = [E0, E1];
       let best = null;
-      for (const c of pool) for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) {
+      for (const c of pool) for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
         const Aff = fitAffine([...anchorsSrc, [i, j]], [...anchorsDst, [c.cx, c.cy]]);
         const Ai = Aff && invert3(Aff);
         if (!Ai) continue;
@@ -731,7 +768,7 @@ function completeNeighbors(faces, cands, lab, W, Hh) {
         for (const d of pool) {
           const [x, y] = applyH(Ai, d.cx, d.cy);
           const ii = Math.round(x), jj = Math.round(y);
-          if (ii < 0 || ii > 2 || jj < 0 || jj > 2 || Math.hypot(x - ii, y - jj) > 0.25) continue;
+          if (ii < 0 || ii > n - 1 || jj < 0 || jj > n - 1 || Math.hypot(x - ii, y - jj) > 0.25) continue;
           const ar = d.area / cellArea(Aff, ii, jj);
           if (ar < 0.25 || ar > 1.3 || sup.some((s) => s.i === ii && s.j === jj)) continue;
           sup.push({ c: d, i: ii, j: jj });
@@ -752,10 +789,10 @@ function completeNeighbors(faces, cands, lab, W, Hh) {
       const residual = res.reduce((t, r) => t + r, 0) / res.length;
       if (Math.max(...res) > 0.3) continue;
       // Profondeur plausible : le bord opposé n'est ni collé ni trop loin.
-      const far = applyH(H, 1, -0.5);
+      const far = applyH(H, (n - 1) / 2, -0.5);
       const depth = beyond(far) / len;
       if (!(depth > 0.15 && depth < 1.3)) continue;
-      const face = finishFace(H, lab, W, Hh, { members: best.sup.length, residual, memberCands: best.sup.map((s) => s.c), allCands: cands, neighbor: true });
+      const face = finishFace(H, lab, W, Hh, { members: best.sup.length, residual, memberCands: best.sup.map((s) => s.c), allCands: cands, neighbor: true, n });
       if (!face || !looksLikeStickers(face.cells)) continue;
       face.neighborOf = A;
       out.push(face);
@@ -775,7 +812,8 @@ function looksLikeStickers(cells) {
     if (ch > 10 && ch < 36 && h > 15 && h < 80) skin++;
     if (c.conf < 0.5) blurry++;
   }
-  return vivid >= 5 && skin <= 1 && blurry <= 2;
+  const k = cells.length / 9;
+  return vivid >= Math.ceil(5 * k) && skin <= Math.floor(k) && blurry <= Math.floor(2 * k);
 }
 
 function cellShapeRatio(c, H, i, j) {

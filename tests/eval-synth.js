@@ -36,7 +36,7 @@ fs.mkdirSync('tests/out/synth', { recursive: true });
 for (let s = seed0; s < seed0 + n; s++) {
   const { image, gt } = cached(s, { style: styleArg, ...extra });
   const t0 = performance.now();
-  const res = detectFaces(image);
+  const res = detectFaces(image, { n: extra.n || 3 });
   time += performance.now() - t0;
   const cell = Math.hypot(gt.centers[0][0] - gt.centers[1][0], gt.centers[0][1] - gt.centers[1][1]);
   const match = res.faces.findIndex((f) => f.cells.every((c, k) => Math.hypot(c.x - gt.centers[k][0], c.y - gt.centers[k][1]) < 0.3 * cell));

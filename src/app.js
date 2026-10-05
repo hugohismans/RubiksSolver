@@ -7,7 +7,10 @@ import { ScanSession, STEPS, COLOR_INFO, slotColors } from './scan/session.js';
 import { scanToCanonical, rotateGrid, FACES, SOLVED, validateFacelets, parseMoves, applyMoves } from './cube/cube.js';
 import { labDist, labToRgb, chroma, hueDeg } from './vision/color.js';
 import { detectMultiScale } from './vision/multiscale.js';
-import { solve, warmUp } from './solver/solver.js';
+import { solve, warmUp, warmUpNxN } from './solver/solver.js';
+import { puzzle } from './cube/nxn.js';
+import { validateNxN } from './cube/colors-nxn.js';
+import { NxNSession, STEPS_NXN, rotateGridN } from './scan/session-nxn.js';
 import { adjacentFaces, topFromNeighbor } from './scan/orientation.js';
 import { CubeModel } from './scan/model.js';
 import { resolveHybrid, fixedFromModel } from './scan/hybrid.js';
@@ -35,6 +38,33 @@ const stage = new Stage($('stage'));
 const cube = stage.cube;
 const slotCssMap = (slotKey) => Object.fromEntries(FACES.map((f) => [f, COLOR_INFO[slotKey[f]].css]));
 
+// ---------------------------------------------------------------- Type de cube
+// N = 2, 3 ou 4. Le 3x3 a ses centres fixes (scan libre ou guidé) ; les
+// 2x2 et 4x4 se scannent en mode guidé, dans un ordre imposé.
+let N = 3;
+try { N = +localStorage.getItem('puzzle') || 3; } catch { /* stockage indisponible */ }
+if (![2, 3, 4].includes(N)) N = 3;
+const PILL = { 2: '✨ 2×2 · solution optimale (≤ 11 coups)', 3: '✨ Scan 3D · solution en ~20 coups', 4: '✨ 4×4 · solution en ~45 coups' };
+const DEMO = {
+  2: "R U F' U2 R' F U' R2 F2 U",
+  3: "R U F2 L' D B R2 U' F L D' B2",
+  4: "Rw U2 F Lw' D B2 Uw R' Fw2 L U' Bw",
+};
+
+function setPuzzle(n) {
+  N = n;
+  try { localStorage.setItem('puzzle', String(n)); } catch { /* idem */ }
+  document.querySelectorAll('#puzzles button').forEach((b) => {
+    b.classList.toggle('on', +b.dataset.n === n);
+    b.setAttribute('aria-checked', String(+b.dataset.n === n));
+  });
+  $('pill').textContent = PILL[n];
+  cube.build(n);
+  cube.setOverride(null);
+  cube.setColors(slotCssMap(WESTERN_SLOTS));
+  if (n !== 3) warmUpNxN(n);
+}
+
 // ---------------------------------------------------------------- Accueil
 let demoTimer = null;
 function goHome() {
@@ -43,6 +73,8 @@ function goHome() {
   cube.uncertain = new Set();
   const enter = async () => {
     if (cube.netGroup.visible) await cube.refold(800);
+    cube.build(N);
+    cube.setState(cube.P.solved);
     cube.setOverride(null);
     cube.setColors(slotCssMap(WESTERN_SLOTS));
     stage.anchor($('home-cube'), { fit: 'cube', duration: 1000 });
@@ -53,17 +85,27 @@ function goHome() {
 
 function initHome() {
   stage.enableDrag($('home-cube'));
+  setPuzzle(N);
+  document.querySelectorAll('#puzzles button').forEach((b) => {
+    b.onclick = () => {
+      if (+b.dataset.n === N) return;
+      setPuzzle(+b.dataset.n);
+      // Petit rebond pour marquer le changement.
+      cube.setDefaultView(0);
+      cube.spinning = true;
+    };
+  });
   cube.setColors(slotCssMap(WESTERN_SLOTS));
   stage.anchor($('home-cube'), { fit: 'cube', duration: 0 });
   cube.setDefaultView(0);
   cube.spinning = true;
   // Petite démo : le cube se mélange tout seul tant qu'on est à l'accueil.
-  const moves = "R U F2 L' D B R2 U' F L D' B2".split(' ');
   let k = 0;
   const demo = () => {
     if ($('home').classList.contains('active') && !cube.override && !cube.netGroup.visible) {
-      const m = parseMoves(moves[k++ % moves.length])[0];
-      cube.move(m.face, m.turns, 420);
+      const moves = DEMO[cube.N].split(' ');
+      const m = cube.P.parse(moves[k++ % moves.length])[0];
+      cube.move(m.face, m.turns, 420, m.lo, m.hi);
     }
     demoTimer = setTimeout(demo, 1100);
   };
@@ -81,15 +123,23 @@ const scan = {
   session: null, scanner: null, guide: null, track: null, cooldownUntil: 0, lastResult: null,
 };
 
-async function startScan(mode = scan.mode || 'free') {
+async function startScan(mode = null) {
+  // 2x2 / 4x4 : toujours en mode guidé (pas de centre pour se repérer).
+  if (N !== 3) mode = 'guided';
+  else scan.pref = mode = mode || scan.pref || 'free';
   scan.mode = mode;
+  scan.N = N;
+  cube.build(N);
   show('scan');
   const el = $('scan');
   el.classList.toggle('free', mode === 'free');
   $('camera-layer').classList.toggle('guided', mode !== 'free');
   el.classList.remove('complete');
   $('scan-mode').textContent = mode === 'free' ? 'Mode pas à pas' : 'Mode libre';
+  $('scan-mode').hidden = N !== 3;
+  $('scan-photo').hidden = N !== 3;
   scan.session = new ScanSession();
+  scan.nxn = N !== 3 ? new NxNSession(N) : null;
   scan.track = null;
   scan.model = new CubeModel();
   scan.free = new ScanSession({ anyOrder: true });
@@ -106,7 +156,7 @@ async function startScan(mode = scan.mode || 'free') {
   if (cube.netGroup.visible) cube.refold(600);
   cube.selected = -1;
   cube.uncertain = new Set();
-  cube.setOverride(new Array(54).fill('#3a3f4d'));
+  cube.setOverride(new Array(cube.P.size).fill('#3a3f4d'));
   if (mode === 'free') {
     stage.anchor($('mini-cube'), { fit: 'cube', duration: 900 });
     cube.setDefaultView(700).then(() => { cube.spinning = true; });
@@ -121,8 +171,12 @@ async function startScan(mode = scan.mode || 'free') {
   $('scan-error').hidden = true;
   const overlay = $('overlay');
   if (!scan.scanner) {
-    scan.scanner = new Scanner($('video'), overlay, { onResult: (res) => (scan.mode === 'free' ? onFreeDetection(res) : onDetection(res)), debug: DEBUG });
+    scan.scanner = new Scanner($('video'), overlay, {
+      onResult: (res) => (scan.nxn ? onDetectionNxN(res) : scan.mode === 'free' ? onFreeDetection(res) : onDetection(res)),
+      debug: DEBUG,
+    });
   }
+  scan.scanner.n = N;
   try {
     if (!scan.scanner.running) await scan.scanner.start();
     $('torch').hidden = !scan.scanner.torchSupported;
@@ -164,6 +218,7 @@ function renderChips(session, current = null) {
 }
 
 function updateScanUI() {
+  if (scan.nxn) { updateScanUINxN(); return; }
   const s = scan.session;
   const step = s.nextStep();
   renderChips(s, step && step.color);
@@ -350,6 +405,117 @@ function acceptFace(color, labs, top = null) {
   }
 }
 
+// ---------------------------------------------------------------- Scan 2x2 / 4x4
+// Ordre imposé : avant, puis trois quarts de tour vers la gauche (droite,
+// arrière, gauche), puis le dessus et le dessous.
+
+// Orientation du guide 3D pour chaque étape (face montrée, face du haut).
+const NXN_VIEW = { F: ['F', 'U'], R: ['R', 'U'], B: ['B', 'U'], L: ['L', 'U'], U: ['U', 'B'], D: ['D', 'F'] };
+
+function renderChipsNxN() {
+  const s = scan.nxn, n = s.N, cur = s.scans.length;
+  $('steps').innerHTML = STEPS_NXN.map((st, i) => {
+    const sc = s.scans[i];
+    const inner = sc
+      ? sc.rgbs.map((c) => `<span style="background:rgb(${c.join(',')})"></span>`).join('')
+      : Array.from({ length: n * n }, () => '<span></span>').join('');
+    return `<div class="step${i === cur ? ' current' : ''}${sc ? ' done' : ''}" style="--n:${n}">${inner}</div>`;
+  }).join('');
+}
+
+function updateScanUINxN() {
+  const s = scan.nxn, n = s.N, n2 = n * n;
+  renderChipsNxN();
+  $('scan-undo').disabled = s.scans.length === 0;
+  const step = s.nextStep();
+  if (!step) return;
+  $('instr-main').textContent = step.text;
+  $('instr-sub').textContent = s.scans.length === 0
+    ? `${step.sub} Tiens le cube à 20–30 cm, bien éclairé.`
+    : step.sub;
+  // Guide 3D : faces déjà scannées à leur place, face attendue en surbrillance.
+  const css = new Array(cube.P.size).fill('#3a3d46');
+  s.scans.forEach((sc, i) => {
+    const f = FACES.indexOf(STEPS_NXN[i].slot);
+    sc.rgbs.forEach((rgb, k) => { css[f * n2 + k] = `rgb(${rgb.join(',')})`; });
+  });
+  const f = FACES.indexOf(step.slot);
+  for (let k = 0; k < n2; k++) css[f * n2 + k] = '#8f86ff';
+  cube.setOverride(css);
+  const [front, top] = NXN_VIEW[step.slot];
+  cube.setView(front, top, 700, [0.35, -0.45]);
+}
+
+function onDetectionNxN(res) {
+  scan.lastResult = res;
+  checkDarkness();
+  const s = scan.nxn;
+  if (!s || s.done || !$('scan').classList.contains('active')) { drawOverlay(res, null); return; }
+  const now = performance.now();
+  // La face la mieux placée (la plus grande, la plus centrale).
+  const face = res.faces[0] || null;
+  drawOverlay(res, face ? { face, id: { status: 'ok' } } : null);
+  if (now < scan.cooldownUntil) return;
+  let progress = 0;
+  if (!face) {
+    setHint(res.faces.length ? '' : 'Je cherche le cube… remplis bien le cadre avec une face');
+    scan.track = null;
+  } else {
+    const labs = face.cells.map((c) => c.lab);
+    const seen = s.seenIndex(labs);
+    if (seen >= 0) {
+      const step = s.nextStep();
+      setHint(seen === s.scans.length - 1 ? `Face enregistrée ✓ — ${step.text.toLowerCase()}` : 'Cette face est déjà faite — suis la consigne');
+      scan.track = null;
+    } else if (face.area / (res.width * res.height) < 0.025) {
+      setHint('Approche le cube');
+      scan.track = null;
+    } else if (Math.abs(face.roll) > 28) {
+      setHint('Redresse le cube (face bien droite)');
+      scan.track = null;
+    } else {
+      const t = scan.track;
+      const same = t && t.frames[t.frames.length - 1].every((l, k) => labDist(l, labs[k]) < 14);
+      if (same) t.frames.push(labs);
+      else scan.track = { frames: [labs], t0: now };
+      const tr = scan.track;
+      const fingers = face.cells.some((c) => looksLikeSkin(c.lab));
+      if (fingers) tr.skin = (tr.skin || 0) + 1;
+      const needMs = STABLE_MS + (tr.skin ? 1500 : 0);
+      progress = Math.min(1, tr.frames.length / STABLE_FRAMES, (now - tr.t0) / needMs);
+      setHint(fingers ? 'Attention : un doigt cache peut-être une case' : 'Ne bouge plus…');
+      if (tr.frames.length >= STABLE_FRAMES && now - tr.t0 >= needMs) {
+        const n2 = s.N * s.N;
+        acceptNxN(Array.from({ length: n2 }, (_, k) => medianLab(tr.frames.map((f) => f[k]))));
+      }
+    }
+  }
+  $('stability-bar').style.width = `${Math.round(progress * 100)}%`;
+}
+
+function acceptNxN(labs) {
+  scan.nxn.accept(labs);
+  scan.track = null;
+  scan.cooldownUntil = performance.now() + 900;
+  const fl = $('flash');
+  fl.classList.add('on');
+  requestAnimationFrame(() => requestAnimationFrame(() => fl.classList.remove('on')));
+  if (navigator.vibrate) navigator.vibrate(60);
+  beep();
+  const next = scan.nxn.nextStep();
+  setHint(next ? `Face ${scan.nxn.scans.length} / 6 ✓ — ${next.text.toLowerCase()}` : 'Les 6 faces sont là ✓');
+  $('stability-bar').style.width = '0%';
+  updateScanUINxN();
+  if (scan.nxn.done) {
+    setTimeout(() => {
+      stopScan();
+      const res = scan.nxn.resolve();
+      const result = { facelets: res.facelets, uncertain: res.uncertain, corrected: res.corrected, slotKey: res.colorOf };
+      if (!res.valid.ok || res.corrected) openReview(result); else celebrateScan(result);
+    }, 500);
+  }
+}
+
 let audioCtx = null;
 function beep() {
   try {
@@ -391,10 +557,12 @@ function drawOverlay(res, pick, classify = null) {
     ctx.closePath();
     ctx.stroke();
     if (!isPick) continue;
-    // Grille intérieure (lignes à 1/3 et 2/3) et couleurs lues.
+    // Grille intérieure et couleurs lues.
     const lerp = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+    const gn = Math.round(Math.sqrt(f.cells.length));
     ctx.lineWidth = 1.5;
-    for (const t of [1 / 3, 2 / 3]) {
+    for (let k = 1; k < gn; k++) {
+      const t = k / gn;
       ctx.beginPath();
       let a = lerp(pts[0], pts[1], t), b = lerp(pts[3], pts[2], t);
       ctx.moveTo(...a); ctx.lineTo(...b);
@@ -402,7 +570,7 @@ function drawOverlay(res, pick, classify = null) {
       ctx.moveTo(...a); ctx.lineTo(...b);
       ctx.stroke();
     }
-    const side = Math.sqrt(Math.abs(f.area)) * (c.clientWidth / (res.width * 1.0)) / 3;
+    const side = Math.sqrt(Math.abs(f.area)) * (c.clientWidth / (res.width * 1.0)) / gn;
     for (const cell of f.cells) {
       const [x, y] = map([cell.x, cell.y]);
       ctx.beginPath();
@@ -671,6 +839,7 @@ function initScan() {
   $('scan-mode').onclick = () => startScan(scan.mode === 'free' ? 'guided' : 'free');
   $('scan-restart').onclick = () => { scan.scanner && scan.scanner.running ? startScan('free') : startScan('free'); };
   $('scan-undo').onclick = () => {
+    if (scan.nxn) { if (scan.nxn.undo()) setHint('Dernière face effacée'); updateScanUI(); return; }
     const c = scan.session.undo();
     if (c) setHint(`Face ${COLOR_INFO[c].name} effacée`);
     updateScanUI();
@@ -695,13 +864,25 @@ function initScan() {
 
 // ---------------------------------------------------------------- Vérification
 const review = { facelets: null, uncertain: new Set(), slotKey: null, selected: -1 };
+const sizeOf = (facelets) => ({ 24: 2, 54: 3, 96: 4 }[facelets.length] || 3);
+// Case non modifiable : le centre d'un 3x3.
+const lockedCell = (i, n) => n === 3 && i % 9 === 4;
 
 function manualResult() {
-  const facelets = FACES.map((f) => '?'.repeat(4) + f + '?'.repeat(4)).join('');
+  const facelets = N === 3
+    ? FACES.map((f) => '?'.repeat(4) + f + '?'.repeat(4)).join('')
+    : '?'.repeat(6 * N * N);
   return { facelets, uncertain: new Set(), scheme: WESTERN_SLOTS, manual: true };
 }
 
+function validateAny(s) {
+  const n = sizeOf(s);
+  return n === 3 ? validateFacelets(s) : validateNxN(s, n);
+}
+
 async function openReview(result) {
+  review.N = sizeOf(result.facelets);
+  if (cube.N !== review.N) { if (cube.netGroup.visible) cube.showNet(false); cube.build(review.N); }
   review.facelets = result.facelets.split('');
   review.uncertain = new Set(result.uncertain || []);
   review.slotKey = result.slotKey || (result.manual ? { ...WESTERN_SLOTS } : slotColors(result));
@@ -738,7 +919,7 @@ function slotCss(slot) {
 }
 
 function selectCell(i) {
-  if (i < 0 || i % 9 === 4) { review.selected = -1; } else { review.selected = review.selected === i ? -1 : i; }
+  if (i < 0 || lockedCell(i, review.N)) { review.selected = -1; } else { review.selected = review.selected === i ? -1 : i; }
   cube.selected = review.selected;
   renderReview();
 }
@@ -767,7 +948,7 @@ function renderReview() {
     msg.className = 'msg';
     msg.textContent = `Il reste ${missing} case${missing > 1 ? 's' : ''} à remplir : touche une case grise, puis une couleur.`;
   } else {
-    const v = validateFacelets(s);
+    const v = validateAny(s);
     ok = v.ok;
     msg.className = `msg ${v.ok ? 'ok' : 'err'}`;
     const rot = review.rotated.length
@@ -810,12 +991,34 @@ function initReview() {
 // ---------------------------------------------------------------- Solution
 const player = { cube: null, start: null, moves: [], idx: 0, busy: false, playing: false };
 
-function moveText(m) { return m.face + (m.turns === 2 ? '2' : m.turns === 3 ? '\'' : ''); }
+function moveText(m) {
+  const base = m.lo === 1 && m.hi === 2 ? `${m.face}w` : m.lo === 1 && m.hi === 1 ? m.face : m.text.replace(/['’2]+$/, '');
+  return base + (m.turns === 2 ? '2' : m.turns === 3 ? '\'' : '');
+}
 function moveDesc(m) {
-  return `Face ${FACE_FR[m.face]} — ${m.turns === 2 ? 'demi-tour' : m.turns === 1 ? 'sens horaire' : 'sens antihoraire'}`;
+  const what = m.hi === 1 ? `Face ${FACE_FR[m.face]}` : m.lo === 1 ? `Les ${m.hi} couches côté ${FACE_FR[m.face]}` : `Tranche ${m.lo} côté ${FACE_FR[m.face]}`;
+  return `${what} — ${m.turns === 2 ? 'demi-tour' : m.turns === 1 ? 'sens horaire' : 'sens antihoraire'}`;
+}
+
+// 2x2 : le solveur garde le coin DBL fixe. On renomme les couleurs (comme si
+// l'on tournait tout le cube) pour que la pièce en DBL y soit bien placée.
+function normalize222(facelets, slotKey) {
+  const P = puzzle(2);
+  const dbl = P.corners[6].map((f) => facelets[f]);
+  const opp = { U: 'D', D: 'U', R: 'L', L: 'R', F: 'B', B: 'F' };
+  const rename = { [dbl[0]]: 'D', [dbl[1]]: 'B', [dbl[2]]: 'L' };
+  for (const [from, to] of Object.entries({ ...rename })) rename[opp[from]] = opp[to];
+  if (Object.keys(rename).length !== 6) return { facelets, slotKey };
+  const key = {};
+  for (const [from, to] of Object.entries(rename)) key[to] = slotKey[from];
+  return { facelets: [...facelets].map((x) => rename[x]).join(''), slotKey: key };
 }
 
 async function openSolve(facelets, slotKey) {
+  const n = sizeOf(facelets);
+  if (n === 2) ({ facelets, slotKey } = normalize222(facelets, slotKey));
+  player.N = n;
+  player.P = puzzle(n);
   show('solve');
   player.cube = cube;
   cube.selected = -1;
@@ -836,12 +1039,17 @@ async function openSolve(facelets, slotKey) {
   player.moves = [];
   player.idx = 0;
   player.playing = false;
-  $('hold').innerHTML = `Tiens ton cube avec la face ${chip(slotKey.U)} en haut et la face ${chip(slotKey.F)} devant toi.`;
+  $('hold').innerHTML = n === 3
+    ? `Tiens ton cube avec la face ${chip(slotKey.U)} en haut et la face ${chip(slotKey.F)} devant toi.`
+    : n === 2
+      ? `Tiens ton cube comme pendant le scan (1re face devant toi). Le coin ${chip(slotKey.D, '')}${chip(slotKey.B, '')}${chip(slotKey.L, '')} ne bouge pas : en bas, derrière, à gauche.`
+      : 'Tiens ton cube comme pendant le scan : la 1re face montrée devant toi, le même dessus.';
   $('solve-title').textContent = 'Recherche de la solution…';
   $('moves').innerHTML = '';
   renderPlayer();
   try {
     const best = await solve(facelets, {
+      N: n,
       improveMs: 4000,
       onUpdate: (moves) => setSolution(moves, true),
     });
@@ -858,15 +1066,17 @@ function setSolution(moves, searching) {
     if (!searching) $('solve-title').textContent = `${player.moves.length} coups`;
     return;
   }
-  player.moves = parseMoves(moves);
+  player.moves = player.P.parse(moves);
   // Vérification : la solution doit vraiment résoudre le cube.
-  const okSolve = applyMoves(player.start, player.moves) === SOLVED;
+  const okSolve = player.P.isSolved(player.P.apply(player.start, player.moves));
   const n = player.moves.length;
   $('solve-title').textContent = !okSolve ? 'Solution invalide (bug)' : n === 0 ? 'Ton cube est déjà résolu !' : `${n} coups${searching ? ' · je cherche plus court…' : ''}`;
   renderPlayer();
 }
 
 function faceCss(face) {
+  // Sans centre fixe, une face n'a pas de couleur propre : teinte neutre.
+  if (player.N !== 3) return '#b9b2ff';
   return player.slotKey ? COLOR_INFO[player.slotKey[face]].css : '#fff';
 }
 
@@ -886,7 +1096,7 @@ async function stepNext() {
   if (player.busy || player.idx >= player.moves.length) return false;
   player.busy = true;
   const m = player.moves[player.idx];
-  await player.cube.move(m.face, m.turns);
+  await player.cube.move(m.face, m.turns, 330, m.lo, m.hi);
   player.idx++;
   player.busy = false;
   renderPlayer();
@@ -898,7 +1108,7 @@ async function stepPrev() {
   if (player.busy || player.idx <= 0) return;
   player.busy = true;
   const m = player.moves[player.idx - 1];
-  await player.cube.move(m.face, 4 - m.turns);
+  await player.cube.move(m.face, 4 - m.turns, 330, m.lo, m.hi);
   player.idx--;
   player.busy = false;
   renderPlayer();
@@ -911,7 +1121,7 @@ function jumpTo(i) {
   $('celebrate').hidden = true;
   $('solve').classList.remove('celebrating');
   cube.spinning = false;
-  cube.setState(applyMoves(player.start, player.moves.slice(0, i)));
+  cube.setState(player.P.apply(player.start, player.moves.slice(0, i)));
   renderPlayer();
   if (i > 0 && i === player.moves.length) celebrateSolved();
 }

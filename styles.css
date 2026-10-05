@@ -85,6 +85,10 @@ button.icon { width: 44px; height: 44px; padding: 0; border-radius: 50%; display
 .tagline { color: var(--muted); margin-top: 10px; font-size: 1.02rem; }
 .home-actions { width: 100%; max-width: 420px; display: flex; flex-direction: column; gap: 12px; }
 .home-actions .cta { width: 100%; }
+/* Choix du cube */
+.puzzles { display: flex; gap: 6px; padding: 5px; border-radius: 999px; background: rgba(255,255,255,0.06); border: 1px solid var(--line); }
+.puzzles button { flex: 1; padding: 9px 0; border-radius: 999px; border: 0; background: transparent; color: var(--muted); font: inherit; font-weight: 700; font-size: 0.98rem; cursor: pointer; transition: background .25s, color .25s, transform .2s; }
+.puzzles button.on { background: var(--grad); color: #111; transform: scale(1.03); }
 .how { display: flex; justify-content: center; gap: 18px; font-size: 0.85rem; color: var(--muted); margin-top: 4px; }
 .how b { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; margin-right: 6px; background: var(--grad); color: #111; font-size: 0.75rem; }
 
@@ -92,7 +96,7 @@ button.icon { width: 44px; height: 44px; padding: 0; border-radius: 50%; display
 #scan { padding: 0; }
 .scan-top { position: absolute; top: 0; left: 0; right: 0; padding: calc(12px + var(--safe-top)) 12px 10px; display: flex; align-items: center; gap: 10px; }
 .steps { flex: 1; display: flex; justify-content: center; gap: 6px; padding-right: 150px; }
-.step { width: 30px; height: 30px; border-radius: 8px; border: 2px solid rgba(255,255,255,0.35); display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr); gap: 1px; padding: 2px; background: rgba(0,0,0,0.35); }
+.step { --n: 3; width: 30px; height: 30px; border-radius: 8px; border: 2px solid rgba(255,255,255,0.35); display: grid; grid-template-columns: repeat(var(--n), 1fr); grid-template-rows: repeat(var(--n), 1fr); gap: 1px; padding: 2px; background: rgba(0,0,0,0.35); }
 .step.current { border-color: white; box-shadow: 0 0 0 3px rgba(123,92,255,0.7); }
 .step span { border-radius: 1.5px; }
 .instruction { position: absolute; top: calc(66px + var(--safe-top)); left: 12px; right: 12px; display: flex; gap: 8px; align-items: center; }

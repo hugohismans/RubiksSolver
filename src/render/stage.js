@@ -8,7 +8,8 @@
 
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from '../../vendor/three/addons/RoundedBoxGeometry.js';
-import { FACELET_GEOMETRY, FACES, SOLVED, applyMove } from '../cube/cube.js';
+import { FACES } from '../cube/cube.js';
+import { puzzle } from '../cube/nxn.js';
 
 const FACE_AXIS = { U: [1, 1], D: [1, -1], R: [0, 1], L: [0, -1], F: [2, 1], B: [2, -1] };
 const NORMAL = { U: [0, 1, 0], D: [0, -1, 0], R: [1, 0, 0], L: [-1, 0, 0], F: [0, 0, 1], B: [0, 0, -1] };
@@ -48,38 +49,51 @@ export class CubeObject {
     this.holder.add(this.root);
     this.colors = { U: '#f5f5f0', R: '#ff3b5c', F: '#2fd36b', D: '#ffd60a', L: '#ff8a1f', B: '#2f7bff', '?': '#3a3f4d' };
     this.override = null; // couleurs par facette (scan) ou null
-    this.state = SOLVED;
     this.queue = Promise.resolve();
     this.speed = 1;
     this.spinning = false;
     this.selected = -1;
     this.uncertain = new Set();
+    this.build(3);
+  }
+
+  // (Re)construit le cube pour une taille N (2, 3, 4…). Le cube garde la
+  // même taille à l'écran : ce sont les pièces qui rapetissent.
+  build(N) {
+    if (this.N === N) return;
+    if (this.cubiesGroup) this.root.remove(this.cubiesGroup, this.netGroup);
+    this.N = N;
+    this.P = puzzle(N);
+    const P = this.P, s = 3 / N, size = P.size;
+    this.cell = s;
 
     // --- Pièces
     this.cubiesGroup = new THREE.Group();
     this.root.add(this.cubiesGroup);
-    const bodyGeo = new RoundedBoxGeometry(0.96, 0.96, 0.96, 3, 0.1);
+    const bodyGeo = new RoundedBoxGeometry(0.96 * s, 0.96 * s, 0.96 * s, 3, 0.1 * s);
     const bodyMat = new THREE.MeshStandardMaterial({ color: 0x15161c, roughness: 0.55 });
-    const stickerGeo = roundedSquare(0.84, 0.13);
+    const stickerGeo = roundedSquare(0.84 * s, 0.13 * s);
     this.cubies = [];
-    this.stickers = new Array(54);
+    this.stickers = new Array(size);
     const cubieAt = new Map();
-    for (let x = -1; x <= 1; x++) for (let y = -1; y <= 1; y++) for (let z = -1; z <= 1; z++) {
-      if (!x && !y && !z) continue;
+    // Coordonnées doublées : -(N-1), …, N-1 (seules les pièces visibles).
+    for (let x = 1 - N; x < N; x += 2) for (let y = 1 - N; y < N; y += 2) for (let z = 1 - N; z < N; z += 2) {
+      if (Math.max(Math.abs(x), Math.abs(y), Math.abs(z)) !== N - 1) continue;
       const g = new THREE.Group();
       g.add(new THREE.Mesh(bodyGeo, bodyMat));
-      g.userData.home = new THREE.Vector3(x, y, z);
+      g.userData.idx = [x, y, z];
+      g.userData.home = new THREE.Vector3(x, y, z).multiplyScalar(s / 2);
       g.position.copy(g.userData.home);
       this.cubiesGroup.add(g);
       this.cubies.push(g);
       cubieAt.set(`${x},${y},${z}`, g);
     }
     const stickerMat = () => new THREE.MeshStandardMaterial({ color: 0x888888, roughness: 0.32, metalness: 0.02, side: THREE.DoubleSide });
-    FACELET_GEOMETRY.forEach((fg, i) => {
-      const g = cubieAt.get(fg.pos.join(','));
+    P.geometry.forEach((fg, i) => {
+      const g = cubieAt.get(fg.cubie.join(','));
       const m = new THREE.Mesh(stickerGeo, stickerMat());
       const n = new THREE.Vector3(...fg.normal);
-      m.position.copy(n.clone().multiplyScalar(0.484));
+      m.position.copy(n.clone().multiplyScalar(0.484 * s));
       m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), n);
       g.add(m);
       this.stickers[i] = m;
@@ -91,21 +105,22 @@ export class CubeObject {
     this.netGroup.visible = false;
     const plateGeo = new RoundedBoxGeometry(2.98, 2.98, 0.08, 2, 0.14);
     const plateMat = new THREE.MeshStandardMaterial({ color: 0x15161c, roughness: 0.6 });
-    const netStickerGeo = roundedSquare(0.86, 0.14);
-    this.netStickers = new Array(54);
+    const netStickerGeo = roundedSquare(0.86 * s, 0.14 * s);
+    this.netStickers = new Array(size);
+    const n2 = N * N;
     const makeFace = (slot) => {
       const g = new THREE.Group();
       const plate = new THREE.Mesh(plateGeo, plateMat);
       plate.position.z = -0.04;
       g.add(plate);
       const f = FACES.indexOf(slot);
-      for (let k = 0; k < 9; k++) {
-        const r = Math.floor(k / 3), c = k % 3;
+      for (let k = 0; k < n2; k++) {
+        const r = Math.floor(k / N), c = k % N;
         const m = new THREE.Mesh(netStickerGeo, stickerMat());
-        m.position.set(c - 1, 1 - r, 0.012);
-        m.userData.index = f * 9 + k;
+        m.position.set((c - (N - 1) / 2) * s, ((N - 1) / 2 - r) * s, 0.012);
+        m.userData.index = f * n2 + k;
         g.add(m);
-        this.netStickers[f * 9 + k] = m;
+        this.netStickers[f * n2 + k] = m;
       }
       return g;
     };
@@ -120,7 +135,7 @@ export class CubeObject {
     this.pR.add(this.pB);
     this.netGroup.add(this.netF, this.pU, this.pD, this.pL, this.pR);
     this.setFold(1);
-    this.setState(SOLVED);
+    this.setState(P.solved);
   }
 
   colorOf(i) {
@@ -129,7 +144,7 @@ export class CubeObject {
   }
 
   refreshColors() {
-    for (let i = 0; i < 54; i++) {
+    for (let i = 0; i < this.P.size; i++) {
       const c = this.colorOf(i);
       this.stickers[i].material.color.set(c);
       this.netStickers[i].material.color.set(c);
@@ -180,17 +195,21 @@ export class CubeObject {
     this.showNet(false);
   }
 
-  // --- Mouvements
-  move(face, turns = 1, duration = 330) {
-    this.queue = this.queue.then(() => this._animate(face, turns, duration / this.speed));
+  // --- Mouvements (couches lo..hi comptées depuis la face : 1 = extérieure)
+  move(face, turns = 1, duration = 330, lo = 1, hi = 1) {
+    this.queue = this.queue.then(() => this._animate(face, turns, duration / this.speed, lo, hi));
     return this.queue;
   }
 
-  _animate(face, turns, duration) {
+  _animate(face, turns, duration, lo = 1, hi = 1) {
     const [axis, sign] = FACE_AXIS[face];
+    const N = this.N;
     const pivotG = new THREE.Group();
     this.cubiesGroup.add(pivotG);
-    const layer = this.cubies.filter((c) => Math.round(c.userData.home.getComponent(axis)) === sign);
+    const layer = this.cubies.filter((c) => {
+      const L = (N - 1 - sign * c.userData.idx[axis]) / 2 + 1;
+      return L >= lo && L <= hi;
+    });
     layer.forEach((c) => pivotG.attach(c));
     const q = turns % 4 === 3 ? -1 : turns % 4;
     const angle = -sign * q * (Math.PI / 2);
@@ -206,7 +225,7 @@ export class CubeObject {
       lit.forEach((m) => m.material.emissive.setRGB(0, 0, 0));
       layer.forEach((c) => this.cubiesGroup.attach(c));
       this.cubiesGroup.remove(pivotG);
-      this.setState(applyMove(this.state, face, turns));
+      this.setState(this.P.apply(this.state, [{ face, lo, hi, turns }]));
     });
   }
 

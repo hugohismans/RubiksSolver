@@ -9,25 +9,25 @@ export const PALETTES = {
   pastel: { W: [245, 245, 245], Y: [255, 238, 90], R: [225, 45, 45], O: [255, 150, 40], B: [40, 140, 240], G: [60, 200, 90] },
 };
 export const COLORS = ['W', 'Y', 'R', 'O', 'B', 'G'];
-import { FACELET_GEOMETRY } from '../../src/cube/cube.js';
+import { puzzle } from '../../src/cube/nxn.js';
 
 const KNORMAL = { U: [0, 1, 0], D: [0, -1, 0], R: [1, 0, 0], L: [-1, 0, 0], F: [0, 0, 1], B: [0, 0, -1] };
 const kcross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 
-// Couleurs de toutes les faces synthétiques pour un vrai cube (chaîne de 54
-// lettres), la face `front` vers la caméra et `top` en haut.
-function cubeFaces(cube) {
+// Couleurs de toutes les faces synthétiques pour un vrai cube (chaîne de
+// 6·N² lettres), la face `front` vers la caméra et `top` en haut.
+function cubeFaces(cube, N = 3) {
   const front = KNORMAL[cube.front], up = KNORMAL[cube.top], right = kcross(up, front);
   const toK = (v) => [0, 1, 2].map((i) => Math.round(right[i] * v[0] - up[i] * v[1] - front[i] * v[2]));
-  const index = new Map(FACELET_GEOMETRY.map((g, i) => [g.pos.join(',') + '|' + g.normal.join(','), i]));
+  const index = new Map(puzzle(N).geometry.map((g, i) => [g.pos.join(',') + '|' + g.normal.join(','), i]));
   return FACES.map((F) => {
     const cells = [];
-    for (let j = 0; j < 3; j++) for (let i = 0; i < 3; i++) {
+    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
       const p = [0, 0, 0];
-      for (let k = 0; k < 3; k++) p[k] = F.u[k] * (i - 1) + F.v[k] * (j - 1);
+      for (let k = 0; k < 3; k++) p[k] = F.u[k] * (2 * i - (N - 1)) + F.v[k] * (2 * j - (N - 1));
       const n = [0, 0, 0]; n[F.axis] = F.sign;
-      // position du cubie = p + n (coordonnées -1..1), normale = n
-      const pos = toK(p.map((x, k) => x + n[k]));
+      // position de la facette = p + N·n (coordonnées doublées), normale = n
+      const pos = toK(p.map((x, k) => x + N * n[k]));
       const nk = toK(n);
       const idx = index.get(pos.join(',') + '|' + nk.join(','));
       cells.push(cube.colorOfSlot[cube.state[idx]]);
@@ -88,15 +88,16 @@ export function generate(seed, opts = {}) {
   // Couleurs : chaque face a un centre distinct, le reste est mélangé.
   const centers = COLORS.slice().sort(() => rnd() - 0.5);
   const solvedFace = opts.solved ?? rnd() < 0.15;
-  const faces = opts.cube ? cubeFaces(opts.cube) : FACES.map((_, k) => {
+  const N = opts.n || 3, NN = N * N, cell = 3 / N;
+  const faces = opts.cube ? cubeFaces(opts.cube, N) : FACES.map((_, k) => {
     const cells = [];
-    for (let c = 0; c < 9; c++) cells.push(c === 4 || solvedFace ? centers[k] : pick(COLORS));
+    for (let c = 0; c < NN; c++) cells.push((N === 3 && c === 4) || solvedFace ? centers[k] : pick(COLORS));
     if (k === 0 && opts.frontColors) return opts.frontColors.slice();
     return cells;
   });
   // Variation de teinte par pièce (plastique) et par image.
   const jitter = () => [range(-8, 8), range(-8, 8), range(-8, 8)];
-  const pieceJitter = faces.map(() => Array.from({ length: 9 }, jitter));
+  const pieceJitter = faces.map(() => Array.from({ length: NN }, jitter));
 
   const tilt = opts.tilt ?? 35;
   let R, f, dist, t, faceFrac;
@@ -152,10 +153,11 @@ export function generate(seed, opts = {}) {
 
   function cubeColor(fi, u, v) {
     // u, v dans [-1.5, 1.5]
-    const ci = Math.min(2, Math.floor(u + 1.5)), cj = Math.min(2, Math.floor(v + 1.5));
-    const lu = u + 1.5 - ci - 0.5, lv = v + 1.5 - cj - 0.5;
-    const name = faces[fi][cj * 3 + ci];
-    const base = pal[name].map((x, k) => Math.max(0, Math.min(255, x + pieceJitter[fi][cj * 3 + ci][k])));
+    const gu = (u + 1.5) / cell, gv = (v + 1.5) / cell;
+    const ci = Math.min(N - 1, Math.floor(gu)), cj = Math.min(N - 1, Math.floor(gv));
+    const lu = gu - ci - 0.5, lv = gv - cj - 0.5;
+    const name = faces[fi][cj * N + ci];
+    const base = pal[name].map((x, k) => Math.max(0, Math.min(255, x + pieceJitter[fi][cj * N + ci][k])));
     const d = sdRoundBox(lu, lv, 0.5 - gapW / 2, radius);
     let col;
     if (style === 'black') {
@@ -163,7 +165,7 @@ export function generate(seed, opts = {}) {
     } else {
       col = d < 0 ? base : base.map((x) => x * grooveDark * 0.6);
     }
-    if (ci === 1 && cj === 1 && logo && d < 0) {
+    if (N % 2 && ci === (N - 1) / 2 && cj === (N - 1) / 2 && logo && d < 0) {
       const rr = Math.hypot(lu, lv);
       if (capR && Math.abs(rr - capR) < 0.025) col = base.map((x) => x * 0.75);
       if (name === 'W' || rnd() < 0) {
@@ -296,7 +298,7 @@ export function generate(seed, opts = {}) {
   // Vérité terrain : centres projetés des 9 cases de la face avant.
   const project = projectWith;
   const gtCenters = [];
-  for (let j = 0; j < 3; j++) for (let i = 0; i < 3; i++) gtCenters.push(project([i - 1, j - 1, -1.5]));
+  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) gtCenters.push(project([(i - (N - 1) / 2) * cell, (j - (N - 1) / 2) * cell, -1.5]));
   return {
     image: { width: W, height: H, data },
     gt: { mask: Buffer.from(mask).toString('base64'), colors: faces[0].slice(), centers: gtCenters, palette: pal, style, logo, solvedFace, bgKind, grooveDark },

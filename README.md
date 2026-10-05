@@ -24,6 +24,32 @@ Safari). La caméra exige une page en **HTTPS** (GitHub Pages convient).
 Il existe aussi un **mode pas à pas** (une face après l'autre, avec consignes
 d'orientation), l'import de photos, et la saisie manuelle des couleurs.
 
+## 2x2 et 4x4
+
+Choisis le cube sur l'accueil (2×2, 3×3, 4×4). Sans centre fixe, la couleur
+d'une face ne dit pas où elle est : le scan se fait donc **dans un ordre
+imposé** — une face (l'avant), trois quarts de tour vers la gauche (droite,
+arrière, gauche), puis le dessus et le dessous. Un sens de rotation inversé ou
+un dessus/dessous montré tourné est corrigé automatiquement (on garde
+l'hypothèse qui forme un vrai cube).
+
+- `src/cube/nxn.js` : modèle N×N générique (mouvements `R`, `Rw`, `3Rw`, `2R`, `x`…).
+- `src/cube/colors-nxn.js` : couleurs sans centres — regroupement équilibré en
+  6 couleurs, puis étiquetage couleur → face qui forme des coins (et, en 4x4,
+  des ailes et des centres) existants, au coût minimal.
+- `src/solver/solve222.js` : 2x2 **optimal** (IDA*, ≤ 11 coups, coin DBL fixe).
+- `src/solver/solve444.js` : 4x4 par réduction — solveur « threephase » de
+  Chen Shuang (csTimer, MIT, via cubing.js ; `vendor/threephase/`) pour les
+  centres et l'appariement des arêtes (parités comprises), puis le 3x3 réduit
+  avec Kociemba (~45 coups au total, < 1 s).
+- Le détecteur prend la taille de grille en paramètre (`detectFaces(img, { n })`).
+- Tests : `node tests/test-nxn.js`, E2E fausse caméra :
+  ```sh
+  node tests/e2e/make-video-nxn.js 4 <état96> tests/out/v4.y4m [style] [palette]
+  node tests/e2e/scan-nxn.mjs 4 tests/out/v4.y4m <état96>
+  node tests/e2e/nxn.mjs   # vérification + solution jouée jusqu'au bout
+  ```
+
 ## Le scan libre (reconstruction 3D)
 
 `src/scan/model.js` :

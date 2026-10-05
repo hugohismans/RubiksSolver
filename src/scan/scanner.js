@@ -18,6 +18,7 @@ export class Scanner {
     this.frameId = 0;
     this.last = null;
     this.running = false;
+    this.n = 3; // taille de la grille cherchée (2x2, 3x3, 4x4)
   }
 
   async start() {
@@ -68,7 +69,7 @@ export class Scanner {
     this.busy = true;
     // Les résultats sont exprimés dans l'image réduite (côté max BASE_SIDE).
     this.scale = Math.min(1, BASE_SIDE / Math.max(v.videoWidth, v.videoHeight));
-    this.worker.postMessage({ id: ++this.frameId, width: w, height: h, buffer: img.data.buffer, debug: this.debug, base: BASE_SIDE }, [img.data.buffer]);
+    this.worker.postMessage({ id: ++this.frameId, width: w, height: h, buffer: img.data.buffer, debug: this.debug, base: BASE_SIDE, n: this.n }, [img.data.buffer]);
   }
 
   handle(res) {

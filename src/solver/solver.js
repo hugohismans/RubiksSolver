@@ -19,8 +19,31 @@ export function warmUp() {
 
 let nextId = 1;
 
+// 2x2 et 4x4 : un worker dédié (module).
+let nxn = null;
+export function warmUpNxN(N) {
+  if (!nxn) nxn = new Worker(new URL('./nxn-worker.js', import.meta.url), { type: 'module' });
+  nxn.postMessage({ type: 'init', N });
+}
+function solveNxN(facelets, N, onUpdate) {
+  warmUpNxN(N);
+  const id = nextId++;
+  return new Promise((resolve, reject) => {
+    const onMsg = (e) => {
+      if (e.data.id !== id) return;
+      nxn.removeEventListener('message', onMsg);
+      if (e.data.type === 'error') { reject(new Error(e.data.message)); return; }
+      onUpdate && onUpdate(e.data.moves, true);
+      resolve(e.data.moves);
+    };
+    nxn.addEventListener('message', onMsg);
+    nxn.postMessage({ id, N, facelets });
+  });
+}
+
 // onUpdate(moves, final) est appelé à chaque solution trouvée.
-export function solve(facelets, { onUpdate, improveMs = 4000 } = {}) {
+export function solve(facelets, { onUpdate, improveMs = 4000, N = 3 } = {}) {
+  if (N !== 3) return solveNxN(facelets, N, onUpdate);
   warmUp();
   const id = nextId++;
   return new Promise((resolve, reject) => {

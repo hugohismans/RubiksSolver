@@ -16,6 +16,7 @@ import { run as runHybrid } from './test-hybrid.js';
 import { detectMultiScale } from '../src/vision/multiscale.js';
 import { roughColor } from '../src/scan/model.js';
 import { fold, ROTATIONS } from '../src/scan/model.js';
+import { runNxN } from './test-nxn.js';
 
 let failed = 0;
 const check = (name, ok, detail = '') => {
@@ -130,6 +131,20 @@ const check = (name, ok, detail = '') => {
   const runs = [['stickerless', 'neon', 21], ['black', 'classic', 22]];
   for (const [style, palette, seed] of runs) if (simulate({ style, palette, seed }).exact) exact++;
   check('scan libre simulé (cube qui tourne)', exact === runs.length, `${exact}/${runs.length} cubes exacts`);
+}
+
+// 5. 2x2 et 4x4
+{
+  check('2x2 / 4x4 : solveurs, couleurs, scan guidé simulé', runNxN() === 0);
+  for (const n of [2, 4]) {
+    let found = 0;
+    for (let s = 1; s <= 20; s++) {
+      const { image, gt } = generate(s, { n, style: s % 2 ? 'black' : 'stickerless' });
+      const cell = Math.hypot(gt.centers[0][0] - gt.centers[1][0], gt.centers[0][1] - gt.centers[1][1]);
+      if (detectFaces(image, { n }).faces.some((f) => f.cells.every((c, k) => Math.hypot(c.x - gt.centers[k][0], c.y - gt.centers[k][1]) < 0.3 * cell))) found++;
+    }
+    check(`détection ${n}x${n} (synthétique)`, found >= (n === 2 ? 14 : 16), `${found}/20`);
+  }
 }
 
 console.log(failed ? `\n${failed} test(s) en échec` : '\nTous les tests passent.');

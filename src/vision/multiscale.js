@@ -51,15 +51,15 @@ function mapFace(f, sx, sy, ox, oy) {
 // hint : zone du cube à l'image précédente (repère réduit). Avec trackOnly,
 // on n'analyse que cette zone (rapide) ; si le cube n'y est plus, on repasse
 // à l'image entière.
-export function detectMultiScale(full, { base = 400, zoom = 420, hint = null, trackOnly = false } = {}) {
+export function detectMultiScale(full, { base = 400, zoom = 420, hint = null, trackOnly = false, n = 3 } = {}) {
   const s = Math.min(1, base / Math.max(full.width, full.height));
   const W = Math.round(full.width * s), H = Math.round(full.height * s);
   if (trackOnly && hint) {
-    const r = zoomPass(full, s, W, H, hint, zoom, 1.25);
+    const r = zoomPass(full, s, W, H, hint, zoom, 1.25, n);
     if (r && r.faces.length) return { faces: r.faces, width: W, height: H, roi: boxOf(r.faces), candidates: [] };
   }
   const small = s < 1 ? cropResize(full, 0, 0, full.width, full.height, W, H) : full;
-  const first = detectFaces(small);
+  const first = detectFaces(small, { n });
   let faces = first.faces;
   // Zone d'intérêt : autour des faces trouvées, sinon celle de l'image précédente.
   let box = null;
@@ -85,7 +85,7 @@ export function detectMultiScale(full, { base = 400, zoom = 420, hint = null, tr
       const zw = Math.round(fw * zs), zh = Math.round(fh * zs);
       if (zw > 40 && zh > 40) {
         const crop = cropResize(full, x0 * k, y0 * k, fw, fh, zw, zh);
-        const second = detectFaces(crop);
+        const second = detectFaces(crop, { n });
         const mapped = mapFaces(second.faces, (x1 - x0) / zw, (y1 - y0) / zh, x0, y0);
         roi = [x0, y0, x1, y1];
         // On garde la passe qui voit le plus de faces (à égalité : le zoom).
@@ -102,7 +102,7 @@ function boxOf(faces) {
 }
 
 // Analyse d'une zone (repère réduit) agrandie d'un facteur `grow`.
-function zoomPass(full, s, W, H, box, zoom, grow) {
+function zoomPass(full, s, W, H, box, zoom, grow, n = 3) {
   const cx = (box[0] + box[2]) / 2, cy = (box[1] + box[3]) / 2;
   const half = Math.max(Math.max(box[2] - box[0], box[3] - box[1]) * grow, Math.min(W, H) * 0.25) / 2;
   const x0 = Math.max(0, cx - half), y0 = Math.max(0, cy - half);
@@ -112,6 +112,6 @@ function zoomPass(full, s, W, H, box, zoom, grow) {
   const zw = Math.round(fw * zs), zh = Math.round(fh * zs);
   if (zw < 40 || zh < 40) return null;
   const crop = cropResize(full, x0 * k, y0 * k, fw, fh, zw, zh);
-  const faces = mapFaces(detectFaces(crop).faces, (x1 - x0) / zw, (y1 - y0) / zh, x0, y0);
+  const faces = mapFaces(detectFaces(crop, { n }).faces, (x1 - x0) / zw, (y1 - y0) / zh, x0, y0);
   return { faces };
 }
