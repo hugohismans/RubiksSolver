@@ -192,3 +192,15 @@ button.icon { width: 44px; height: 44px; padding: 0; border-radius: 50%; display
 #torch.suggest { animation: glow 1.2s ease-in-out infinite; }
 #torch.on { background: var(--yellow); color: #111; }
 @keyframes glow { 50% { box-shadow: 0 0 0 6px rgba(255, 214, 10, 0.45); } }
+
+/* Batterie : les animations décoratives ne tournent que sur l'accueil ; sous
+   la caméra, le fond est masqué et les panneaux ne floutent plus la vidéo
+   (un flou recalculé 30 fois par seconde coûte cher). */
+body:not([data-screen="home"]) .bg i,
+body:not([data-screen="home"]) .rainbow,
+body:not([data-screen="home"]) .cta::after { animation-play-state: paused; }
+body[data-screen="scan"] .bg { display: none; }
+#scan .glass, .mini-backdrop { backdrop-filter: none; -webkit-backdrop-filter: none; background: rgba(14, 16, 32, 0.78); }
+@media (prefers-reduced-motion: reduce) {
+  .bg i, .rainbow, .cta::after { animation: none; }
+}

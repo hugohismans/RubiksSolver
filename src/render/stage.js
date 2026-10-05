@@ -27,13 +27,23 @@ function roundedSquare(size, r) {
   return new THREE.ShapeGeometry(s, 5);
 }
 
+// Rendu à la demande (batterie) : la scène n'est redessinée que si quelque
+// chose bouge. `motion.tweens` compte les animations en cours, `motion.dirty`
+// signale un changement ponctuel.
+const motion = { tweens: 0, dirty: true };
+export const invalidate = () => { motion.dirty = true; };
+
 function tween(duration, fn, easing = ease) {
+  motion.tweens++;
   return new Promise((resolve) => {
     const t0 = performance.now();
     const step = () => {
       const t = Math.min(1, (performance.now() - t0) / duration);
       fn(easing(t));
-      if (t < 1) requestAnimationFrame(step); else resolve();
+      if (t < 1) { requestAnimationFrame(step); return; }
+      motion.tweens--;
+      motion.dirty = true;
+      resolve();
     };
     requestAnimationFrame(step);
   });
@@ -98,6 +108,7 @@ export class CubeObject {
       g.add(m);
       this.stickers[i] = m;
     });
+    invalidate();
 
     // --- Patron articulé (visible seulement pour le dépliage)
     this.netGroup = new THREE.Group();
@@ -144,6 +155,7 @@ export class CubeObject {
   }
 
   refreshColors() {
+    invalidate();
     for (let i = 0; i < this.P.size; i++) {
       const c = this.colorOf(i);
       this.stickers[i].material.color.set(c);
@@ -154,6 +166,7 @@ export class CubeObject {
   setColors(colors) { Object.assign(this.colors, colors); this.refreshColors(); }
 
   setState(facelets) {
+    invalidate();
     this.state = facelets;
     for (const c of this.cubies) {
       if (c.parent !== this.cubiesGroup) this.cubiesGroup.attach(c);
@@ -177,9 +190,11 @@ export class CubeObject {
     // Recentre la croix (son centre n'est pas la face avant).
     this.netGroup.position.set(-1.5 * (1 - f), 0, -1.5 * (1 - f));
     this.fold = f;
+    invalidate();
   }
 
   showNet(on) {
+    invalidate();
     this.netGroup.visible = on;
     this.cubiesGroup.visible = !on;
   }
@@ -257,17 +272,27 @@ export class CubeObject {
   flatView(duration = 600) { return this.orientTo(new THREE.Quaternion(), duration); }
 
   // Mise à jour par image : rotation lente, clignotement des cases douteuses.
+  // Renvoie true si quelque chose a bougé (animation « au repos »).
   update(time, dt) {
-    if (this.spinning) this.root.rotateOnWorldAxis(new THREE.Vector3(0, 1, 0), dt * 0.6);
-    if (this.netGroup.visible) {
+    let busy = false;
+    if (this.spinning) { this.root.rotateOnWorldAxis(new THREE.Vector3(0, 1, 0), dt * 0.6); busy = true; }
+    // (un dernier passage quand la sélection ou les cases douteuses changent,
+    // pour éteindre la surbrillance)
+    const sig = `${this.selected}:${this.uncertain.size}`;
+    if (this.netGroup.visible && (this.uncertain.size || this.selected >= 0 || this._scaling || sig !== this._sig)) {
+      this._sig = sig;
+      busy = true;
+      this._scaling = false;
       const pulse = 0.5 + 0.5 * Math.sin(time * 6);
       this.netStickers.forEach((m, i) => {
         const sel = i === this.selected, unsure = this.uncertain.has(i);
         m.material.emissive.setRGB(sel ? 0.35 : unsure ? 0.45 * pulse : 0, sel ? 0.35 : unsure ? 0.33 * pulse : 0, sel ? 0.35 : 0);
         const s = sel ? 1.12 : 1;
+        if (Math.abs(s - m.scale.x) > 0.002) this._scaling = true;
         m.scale.setScalar(m.scale.x + (s - m.scale.x) * Math.min(1, dt * 12));
       });
     }
+    return busy;
   }
 }
 
@@ -298,19 +323,27 @@ export class Stage {
     this.drag = null;
     window.addEventListener('resize', () => this.resize());
     this.resize();
-    let last = performance.now();
+    let last = performance.now(), lastRender = 0;
     const loop = (now) => {
-      const dt = Math.min(0.05, (now - last) / 1000);
-      last = now;
-      this.updateAnchor(now);
-      this.cube.update(now / 1000, dt);
-      this.renderer.render(this.scene, this.camera);
       requestAnimationFrame(loop);
+      const dt = Math.min(0.05, (now - last) / 1000);
+      // Animations « au repos » (rotation lente, cases qui clignotent) :
+      // 30 images/s suffisent. Mouvements, transitions, doigt : pleine vitesse.
+      const live = motion.tweens > 0 || motion.dirty || this.anchorMoving(now);
+      if (!live && now - lastRender < 32) return;
+      last = now;
+      const moved = this.updateAnchor(now);
+      const idle = this.cube.update(now / 1000, dt);
+      if (!live && !moved && !idle) return;
+      motion.dirty = false;
+      lastRender = now;
+      this.renderer.render(this.scene, this.camera);
     };
     requestAnimationFrame(loop);
   }
 
   resize() {
+    invalidate();
     const w = window.innerWidth, h = window.innerHeight;
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
@@ -346,11 +379,15 @@ export class Stage {
     return new Promise((r) => setTimeout(r, duration));
   }
 
+  anchorMoving(now) { return !!this.from && now - this.t0 < this.duration; }
+
+  // Renvoie true si le cube a changé de place ou de taille.
   updateAnchor(now) {
-    if (!this.anchorEl) return;
+    if (!this.anchorEl) return false;
     const target = this.targetFor(this.anchorEl, this.anchorFit);
-    if (!target) return;
+    if (!target) return false;
     const h = this.cube.holder;
+    const before = [h.position.x, h.position.y, h.scale.x];
     let t = this.duration ? Math.min(1, (now - this.t0) / this.duration) : 1;
     if (this.from && t < 1) {
       const e = ease(t);
@@ -363,6 +400,7 @@ export class Stage {
       h.scale.setScalar(target.s);
       this.from = null;
     }
+    return Math.abs(before[0] - h.position.x) + Math.abs(before[1] - h.position.y) + Math.abs(before[2] - h.scale.x) > 1e-4;
   }
 
   // Facette du patron sous un point de l'écran (ou -1).
@@ -387,6 +425,7 @@ export class Stage {
       if (moved < 4) return;
       this.cube.spinning = false;
       this.cube._orientToken = null;
+      invalidate();
       const k = 0.01;
       this.cube.root.quaternion
         .premultiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), dx * k))

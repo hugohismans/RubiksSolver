@@ -2,6 +2,10 @@
 
 const CAPTURE_SIDE = 960; // image envoyée au worker (pour le zoom sur le cube)
 const BASE_SIDE = 400; // résolution de la passe rapide (repère des résultats)
+// Cadence d'analyse (batterie) : ~8 images/s quand un cube est en vue, ~3/s
+// sinon. Un téléphone lent fait naturellement moins (une image à la fois).
+const ACTIVE_MS = 120;
+const IDLE_MS = 330;
 
 export class Scanner {
   constructor(video, overlay, { onResult, debug = false } = {}) {
@@ -19,12 +23,16 @@ export class Scanner {
     this.last = null;
     this.running = false;
     this.n = 3; // taille de la grille cherchée (2x2, 3x3, 4x4)
+    this.lastSent = 0;
+    this.lastSeen = 0;
+    this.fps = 8; // images analysées par seconde (moyenne glissante)
+    this.lastDone = 0;
   }
 
   async start() {
     const constraints = {
       audio: false,
-      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } },
     };
     this.stream = await navigator.mediaDevices.getUserMedia(constraints);
     this.video.srcObject = this.stream;
@@ -36,7 +44,14 @@ export class Scanner {
     this.loop();
   }
 
+  // Nombre d'images concordantes à exiger pour ~`ms` de stabilité, selon la
+  // vitesse réelle du téléphone (entre `min` et `max`).
+  framesFor(ms, min = 3, max = 6) {
+    return Math.max(min, Math.min(max, Math.round((ms / 1000) * this.fps)));
+  }
+
   stop() {
+    this.lastDone = 0;
     this.running = false;
     if (this.stream) this.stream.getTracks().forEach((t) => t.stop());
     this.stream = null;
@@ -57,6 +72,9 @@ export class Scanner {
     requestAnimationFrame(() => this.loop());
     const v = this.video;
     if (this.busy || v.readyState < 2 || !v.videoWidth) return;
+    const now = performance.now();
+    if (now - this.lastSent < (now - this.lastSeen < 2500 ? ACTIVE_MS : IDLE_MS)) return;
+    this.lastSent = now;
     const s = Math.min(1, CAPTURE_SIDE / Math.max(v.videoWidth, v.videoHeight));
     const w = Math.round(v.videoWidth * s), h = Math.round(v.videoHeight * s);
     if (this.work.width !== w || this.work.height !== h) { this.work.width = w; this.work.height = h; }
@@ -74,6 +92,10 @@ export class Scanner {
 
   handle(res) {
     this.busy = false;
+    const now = performance.now();
+    if (res.faces && res.faces.length) this.lastSeen = now;
+    if (this.lastDone) this.fps = 0.8 * this.fps + 0.2 * (1000 / Math.max(1, now - this.lastDone));
+    this.lastDone = now;
     // Lien « face complétée -> face d'origine » (les objets ne survivent pas
     // au passage par le worker, on les relie par indice).
     for (const f of res.faces || []) if (f.neighborIdx >= 0) f.neighborOf = res.faces[f.neighborIdx];

@@ -28,6 +28,7 @@ const FACE_FR = { U: 'haut', D: 'bas', F: 'avant', B: 'arrière', R: 'droite', L
 const chip = (key, text) => `<span class="chip" style="background:${COLOR_INFO[key].css}">${text || COLOR_INFO[key].name}</span>`;
 
 function show(id) {
+  document.body.dataset.screen = id;
   document.querySelectorAll('.screen').forEach((s) => s.classList.toggle('active', s.id === id));
   $('camera-layer').classList.toggle('on', id === 'scan');
   if (id !== 'solve') $('solve').classList.remove('celebrating');
@@ -277,8 +278,9 @@ function pickFace(res) {
   return best;
 }
 
-const STABLE_FRAMES = 6;
+// Stabilité exigée avant capture : ~650 ms, en 3 à 6 images selon le téléphone.
 const STABLE_MS = 650;
+const stableFrames = () => (scan.scanner ? scan.scanner.framesFor(STABLE_MS + 100) : 6);
 
 function onDetection(res) {
   scan.lastResult = res;
@@ -328,10 +330,10 @@ function onDetection(res) {
       const top = voteTop(face, id.color, res.faces);
       if (top) tr.topVotes = [...(tr.topVotes || []), top];
       const needMs = STABLE_MS + (tr.skin ? 1500 : 0);
-      progress = Math.min(1, tr.frames.length / STABLE_FRAMES, (now - tr.t0) / needMs);
+      progress = Math.min(1, tr.frames.length / stableFrames(), (now - tr.t0) / needMs);
       setHint(fingers ? 'Attention : un doigt cache peut-être une case'
         : id.color === step.color ? 'Ne bouge plus…' : `Face ${COLOR_INFO[id.color].name} — ne bouge plus…`);
-      if (tr.frames.length >= STABLE_FRAMES && now - tr.t0 >= needMs) capture(tr);
+      if (tr.frames.length >= stableFrames() && now - tr.t0 >= needMs) capture(tr);
     }
   }
   $('stability-bar').style.width = `${Math.round(progress * 100)}%`;
@@ -482,9 +484,9 @@ function onDetectionNxN(res) {
       const fingers = face.cells.some((c) => looksLikeSkin(c.lab));
       if (fingers) tr.skin = (tr.skin || 0) + 1;
       const needMs = STABLE_MS + (tr.skin ? 1500 : 0);
-      progress = Math.min(1, tr.frames.length / STABLE_FRAMES, (now - tr.t0) / needMs);
+      progress = Math.min(1, tr.frames.length / stableFrames(), (now - tr.t0) / needMs);
       setHint(fingers ? 'Attention : un doigt cache peut-être une case' : 'Ne bouge plus…');
-      if (tr.frames.length >= STABLE_FRAMES && now - tr.t0 >= needMs) {
+      if (tr.frames.length >= stableFrames() && now - tr.t0 >= needMs) {
         const n2 = s.N * s.N;
         acceptNxN(Array.from({ length: n2 }, (_, k) => medianLab(tr.frames.map((f) => f[k]))));
       }
@@ -710,6 +712,7 @@ function onFreeDetection(res) {
     return;
   }
   // Capture : toutes les faces visibles sont suivies en parallèle.
+  scan.cap.opts.stableFrames = scan.scanner.framesFor(600, 3, 5);
   const u = scan.cap.update(res.faces, now);
   scan.lastPick = u.tracking ? u.tracking.face : null;
   for (const c of u.captured) captureFree(c.color, c.labs);

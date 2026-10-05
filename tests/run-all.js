@@ -3,6 +3,17 @@
 //   - attribution des couleurs, session de scan (orientation, rouge/orange)
 //   - détecteur : photo réelle + 120 images synthétiques (seuils minimaux)
 // Les tests E2E navigateur (fausse caméra) sont à part : voir README.
+// Tirages aléatoires reproductibles (cubes mélangés, bruit) : un test qui
+// échoue échoue toujours, et CI ne clignote pas au hasard.
+{
+  let a = +(process.env.SEED || 20261005);
+  Math.random = () => {
+    a |= 0; a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
 import Cube from 'cubejs';
 import { applyMoves, SOLVED, validateFacelets, invertMoves } from '../src/cube/cube.js';
 import { run as runColors } from './test-colors.js';
