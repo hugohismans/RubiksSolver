@@ -21,8 +21,10 @@ Safari). La caméra exige une page en **HTTPS** (GitHub Pages convient).
    quelques secondes. Lecture coup par coup en 3D. Le bouton retour mène à la
    vérification des couleurs (correction d'une case au toucher).
 
-Il existe aussi un **mode pas à pas** (une face après l'autre, avec consignes
-d'orientation), l'import de photos, et la saisie manuelle des couleurs.
+Par défaut, le scan se fait **face par face** (une face après l'autre, avec
+consignes d'orientation) : c'est le plus fiable. Le **mode libre** décrit
+ci-dessus reste disponible en option (bouton « Essayer le mode libre (bêta) »),
+ainsi que l'import de photos et la saisie manuelle des couleurs.
 
 ## 2x2 et 4x4
 

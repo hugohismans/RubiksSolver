@@ -127,7 +127,7 @@ const scan = {
 async function startScan(mode = null) {
   // 2x2 / 4x4 : toujours en mode guidé (pas de centre pour se repérer).
   if (N !== 3) mode = 'guided';
-  else scan.pref = mode = mode || scan.pref || 'free';
+  else scan.pref = mode = mode || scan.pref || 'guided'; // face par face par défaut, le libre en option
   scan.mode = mode;
   scan.N = N;
   cube.build(N);
@@ -136,7 +136,7 @@ async function startScan(mode = null) {
   el.classList.toggle('free', mode === 'free');
   $('camera-layer').classList.toggle('guided', mode !== 'free');
   el.classList.remove('complete');
-  $('scan-mode').textContent = mode === 'free' ? 'Mode pas à pas' : 'Mode libre';
+  $('scan-mode').textContent = mode === 'free' ? 'Mode face par face' : 'Essayer le mode libre (bêta)';
   $('scan-mode').hidden = N !== 3;
   $('scan-photo').hidden = N !== 3;
   scan.session = new ScanSession();

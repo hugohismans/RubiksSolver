@@ -21,7 +21,7 @@ page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
 await page.goto(base + (process.env.DEBUG ? '?debug=1' : ''));
 await page.click('#btn-scan');
 await page.waitForTimeout(800);
-if ((await page.textContent('#scan-mode')).includes('pas à pas')) await page.click('#scan-mode');
+if ((await page.textContent('#scan-mode')).includes('face par face')) await page.click('#scan-mode');
 const t0 = Date.now();
 let shot = 0;
 while (Date.now() - t0 < 90000) {

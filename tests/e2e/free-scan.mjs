@@ -16,6 +16,9 @@ page.on('pageerror', (e) => errors.push(String(e)));
 page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
 await page.goto(base);
 await page.click('#btn-scan');
+await page.waitForTimeout(800);
+// Le mode face par face est le mode par défaut : on passe en mode libre.
+if ((await page.textContent('#scan-mode')).includes('libre')) await page.click('#scan-mode');
 const t0 = Date.now();
 let shots = 0, state = null;
 while (Date.now() - t0 < (+process.env.TIMEOUT || 120000)) {
