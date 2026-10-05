@@ -9,7 +9,7 @@
 
 import { FACES, rotateGrid, CANONICAL_NEIGHBORS } from '../cube/cube.js';
 import { assignColors } from '../cube/colors.js';
-import { hueDeg } from '../vision/color.js';
+import { hueDeg, chroma } from '../vision/color.js';
 
 const WESTERN = { U: 'W', R: 'R', F: 'G', D: 'Y', L: 'O', B: 'B' };
 const MIRROR = { ...WESTERN, R: 'O', L: 'R' };
@@ -25,6 +25,8 @@ export async function resolveHybrid(loose, fixed = {}, { onProgress, relations =
     const rank = (lab) => { const h = hueDeg(lab); return h > 300 ? h - 360 : h; };
     if (rank(loose.R[4]) > rank(loose.O[4])) [loose.R, loose.O] = [loose.O, loose.R];
   }
+  // Blanc/jaune : le blanc est le moins saturé des deux.
+  if (loose.W && loose.Y && chroma(loose.W[4]) > chroma(loose.Y[4])) [loose.W, loose.Y] = [loose.Y, loose.W];
   let best = null, second = null;
   let evals = 0;
   // Meilleure alternative valide qui donne un cube différent (ambiguïté).

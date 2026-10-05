@@ -102,6 +102,24 @@ const check = (name, ok, detail = '') => {
   check('mode libre : une vue de coin lève l’ambiguïté', c.ok === c.n, `${c.ok}/${c.n}`);
 }
 
+// 3d. Vidéo réelle (iPhone, lumière chaude, cube tenu par un coin) : les
+// deux faces bien visibles doivent être capturées vite, sans doublon.
+{
+  const { FreeCapture } = await import('../src/scan/freecapture.js');
+  const fs = await import('node:fs');
+  const dir = 'tests/fixtures/rec1';
+  const files = fs.readdirSync(dir).filter((f) => f.endsWith('.jpg')).sort();
+  const cap = new FreeCapture();
+  let roi = null, firstAt = null;
+  files.forEach((f, k) => {
+    const r = detectMultiScale(loadImage(`${dir}/${f}`), { hint: roi, trackOnly: !!roi && k % 4 !== 0 });
+    roi = r.roi;
+    const u = cap.update(r.faces, (k * 1000) / 8);
+    if (u.captured.length && firstAt === null) firstAt = k / 8;
+  });
+  check('vidéo réelle : captures rapides et sans doublon', cap.count === 2 && firstAt !== null && firstAt < 3.5, `${cap.count} faces, première à ${firstAt}s`);
+}
+
 // 4. Scan libre (modèle 3D)
 {
   check('24 rotations du cube', ROTATIONS.length === 24);

@@ -11,6 +11,7 @@ import { solve, warmUp } from './solver/solver.js';
 import { adjacentFaces, topFromNeighbor } from './scan/orientation.js';
 import { CubeModel } from './scan/model.js';
 import { resolveHybrid, fixedFromModel } from './scan/hybrid.js';
+import { FreeCapture } from './scan/freecapture.js';
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -92,6 +93,7 @@ async function startScan(mode = scan.mode || 'free') {
   scan.track = null;
   scan.model = new CubeModel();
   scan.free = new ScanSession({ anyOrder: true });
+  scan.cap = new FreeCapture();
   scan.relVotes = {};
   scan.relChanged = false;
   scan.resolving = false;
@@ -110,7 +112,7 @@ async function startScan(mode = scan.mode || 'free') {
     cube.setDefaultView(700).then(() => { cube.spinning = true; });
     renderChips(scan.free);
     refreshMini();
-    setHint('Montre-moi une face du cube, bien de face');
+    setHint('Montre-moi ton cube, de face ou par un coin');
   } else {
     cube.spinning = false;
     stage.anchor($('guide'), { fit: 'cube', duration: 900 });
@@ -498,10 +500,6 @@ function refreshMini(showColor = null) {
   }
 }
 
-function pickFreeFace(res) {
-  const usable = res.faces.filter((f) => !f.neighborOf && (f.members >= 5 || f.solid));
-  return usable.sort((a, b) => b.squareness * b.area - a.squareness * a.area)[0] || null;
-}
 
 function onFreeDetection(res) {
   if (scan.finishing || !$('scan').classList.contains('active')) return;
@@ -512,7 +510,11 @@ function onFreeDetection(res) {
   let fresh = null;
   for (const [slot, labs] of Object.entries(fixed)) {
     const color = WESTERN_SLOTS[slot];
-    if (!scan.free.scans[color]) { scan.free.accept(color, labs, labs.map((l) => labToRgb(...l))); fresh = color; }
+    if (!scan.free.scans[color] && !scan.cap.seenAs(labs)) {
+      scan.free.accept(color, labs, labs.map((l) => labToRgb(...l)));
+      scan.cap.add(color, labs);
+      fresh = color;
+    }
   }
   if (fresh) {
     renderChips(scan.free);
@@ -527,56 +529,35 @@ function onFreeDetection(res) {
     if (scan.relChanged && !scan.resolving) { scan.relChanged = false; finishFree(); }
     return;
   }
-  const face = pickFreeFace(res);
-  scan.lastPick = face;
-  let progress = 0;
-  if (!face) {
-    scan.track = null;
-    freeHint(Object.keys(scan.free.scans).length ? `Montre-moi une autre face : ${missingNames().join(', ')}` : 'Montre-moi une face du cube, bien de face');
+  // Capture : toutes les faces visibles sont suivies en parallèle.
+  const u = scan.cap.update(res.faces, now);
+  scan.lastPick = u.tracking ? u.tracking.face : null;
+  for (const c of u.captured) captureFree(c.color, c.labs);
+  if (scan.free.done) return;
+  if (u.captured.length) {
+    // (la consigne vient d'être mise à jour par captureFree)
+  } else if (u.tracking) {
+    freeHint(`Face ${COLOR_INFO[u.tracking.guess] ? COLOR_INFO[u.tracking.guess].name : ''} — ne bouge plus…`, true);
+  } else if (u.seen.length) {
+    freeHint(`Déjà vue ✓ — tourne le cube : il reste ${missingNames().join(', ')}`);
   } else {
-    const id = scan.free.identify(face.cells[4].lab);
-    const areaFrac = face.area / (res.width * res.height);
-    if (id.status === 'already') {
-      scan.track = null;
-      freeHint(`Face ${COLOR_INFO[id.color].name} déjà vue ✓ — il reste : ${missingNames().join(', ')}`);
-    } else if (id.status !== 'ok') {
-      scan.track = null;
-      freeHint('Couleur du centre pas claire — évite les reflets');
-    } else if (areaFrac < 0.02) {
-      scan.track = null;
-      freeHint('Approche un peu le cube');
-    } else {
-      const labs = face.cells.map((c) => c.lab);
-      const t = scan.track;
-      const same = t && t.color === id.color && t.frames[t.frames.length - 1].every((l, k) => labDist(l, labs[k]) < 14);
-      if (same) t.frames.push(labs);
-      else scan.track = { color: id.color, frames: [labs], t0: now };
-      const tr = scan.track;
-      const fingers = face.cells.some((c) => looksLikeSkin(c.lab, scan.free));
-      if (fingers) tr.skin = (tr.skin || 0) + 1;
-      const needMs = STABLE_MS + (tr.skin ? 1200 : 0);
-      progress = Math.min(1, tr.frames.length / STABLE_FRAMES, (now - tr.t0) / needMs);
-      freeHint(fingers ? 'Attention : un doigt cache peut-être une case' : `Face ${COLOR_INFO[id.color].name} — ne bouge plus…`, true);
-      if (tr.frames.length >= STABLE_FRAMES && now - tr.t0 >= needMs) captureFree(tr);
-    }
+    freeHint(Object.keys(scan.free.scans).length ? `Montre-moi une autre face : ${missingNames().join(', ')}` : 'Montre-moi ton cube, de face ou par un coin');
   }
-  $('stability-bar').style.width = `${Math.round(progress * 100)}%`;
+  $('stability-bar').style.width = `${Math.round((u.tracking ? u.tracking.progress : 0) * 100)}%`;
 }
 
-function captureFree(track) {
-  const labs = Array.from({ length: 9 }, (_, k) => medianLab(track.frames.map((f) => f[k])));
-  scan.free.accept(track.color, labs, labs.map((l) => labToRgb(...l)));
-  scan.track = null;
+function captureFree(color, labs) {
+  scan.free.accept(color, labs, labs.map((l) => labToRgb(...l)));
   const fl = $('flash');
   fl.classList.add('on');
   requestAnimationFrame(() => requestAnimationFrame(() => fl.classList.remove('on')));
   if (navigator.vibrate) navigator.vibrate(60);
   beep();
   renderChips(scan.free);
-  refreshMini(track.color);
+  refreshMini(color);
   $('stability-bar').style.width = '0%';
   const left = missingNames();
-  freeHint(left.length ? `Face ${COLOR_INFO[track.color].name} ✓ — encore : ${left.join(', ')}` : 'Toutes les faces sont là ✓', true);
+  freeHint(left.length ? `Face ${COLOR_INFO[color].name} ✓ — encore : ${left.join(', ')}` : 'Toutes les faces sont là ✓', true);
   if (scan.free.done) setTimeout(finishFree, 400);
 }
 
@@ -622,6 +603,7 @@ async function finishFree() {
     const color = worst ? worst[0] : null;
     if (color && scan.free.scans[color]) {
       delete scan.free.scans[color];
+      scan.cap.remove(color);
       scan.free.history = scan.free.history.filter((c) => c !== color);
       renderChips(scan.free);
       refreshMini();
