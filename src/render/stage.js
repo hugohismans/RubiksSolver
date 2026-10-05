@@ -72,6 +72,9 @@ export class CubeObject {
   build(N) {
     if (this.N === N) return;
     if (this.cubiesGroup) this.root.remove(this.cubiesGroup, this.netGroup);
+    // Les mouvements en attente concernaient l'ancien cube : on les oublie
+    // (un mouvement en cours, lui, s'arrêtera de lui-même, voir _animate).
+    this.queue = Promise.resolve();
     this.N = N;
     this.P = puzzle(N);
     const P = this.P, s = 3 / N, size = P.size;
@@ -219,8 +222,9 @@ export class CubeObject {
   _animate(face, turns, duration, lo = 1, hi = 1) {
     const [axis, sign] = FACE_AXIS[face];
     const N = this.N;
+    const group = this.cubiesGroup;
     const pivotG = new THREE.Group();
-    this.cubiesGroup.add(pivotG);
+    group.add(pivotG);
     const layer = this.cubies.filter((c) => {
       const L = (N - 1 - sign * c.userData.idx[axis]) / 2 + 1;
       return L >= lo && L <= hi;
@@ -238,8 +242,11 @@ export class CubeObject {
       lit.forEach((m) => m.material.emissive.setRGB(g, g, g));
     }).then(() => {
       lit.forEach((m) => m.material.emissive.setRGB(0, 0, 0));
-      layer.forEach((c) => this.cubiesGroup.attach(c));
-      this.cubiesGroup.remove(pivotG);
+      // Cube reconstruit entre-temps (autre taille) : cette animation ne le
+      // concerne plus, surtout ne pas y remettre les anciennes pièces.
+      if (group !== this.cubiesGroup) return;
+      layer.forEach((c) => group.attach(c));
+      group.remove(pivotG);
       this.setState(this.P.apply(this.state, [{ face, lo, hi, turns }]));
     });
   }
